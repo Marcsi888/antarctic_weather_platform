@@ -17,6 +17,10 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "pytest-httpx>=0.35",
+    # Starlette's TestClient prefers httpx2 over plain httpx; this is a
+    # test-only dependency and does not affect the real AEMET client,
+    # which stays on httpx per the project's chosen HTTP client.
+    "httpx2>=2.12",
     "mypy>=1.13",
     "ruff>=0.7",
 ]
