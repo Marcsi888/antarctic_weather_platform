@@ -66,7 +66,12 @@ subtle correctness bugs.
 ## Technology Stack
 
 **Backend:** Python 3.12, FastAPI, Pydantic v2, pydantic-settings,
-SQLAlchemy 2.x, SQLite, httpx, pytest.
+SQLAlchemy 2.x, SQLite, httpx, pytest, mypy (strict mode), ruff.
+
+`httpx2` (Pydantic's actively maintained continuation of `httpx`, since
+Starlette's `TestClient` deprecated the original) is a dev-only dependency
+used solely by the test client. The AEMET integration itself uses `httpx`,
+per the project's chosen HTTP client — see Assumptions below.
 
 **Frontend:** not yet implemented.
 
@@ -76,11 +81,17 @@ SQLAlchemy 2.x, SQLite, httpx, pytest.
 antarctic_weather_platform/
 ├── backend/
 │   ├── app/
+│   │   ├── main.py              # FastAPI app factory, health check
 │   │   └── core/
-│   │       └── config.py       # environment-driven application settings
+│   │       ├── config.py        # environment-driven application settings
+│   │       ├── logging.py       # root logger configuration
+│   │       └── exceptions.py    # application exception hierarchy
 │   ├── tests/
 │   │   └── unit/
-│   │       └── test_config.py
+│   │       ├── test_config.py
+│   │       ├── test_exceptions.py
+│   │       ├── test_logging.py
+│   │       └── test_main.py
 │   └── pyproject.toml
 ├── docs/
 │   └── development-plan.md
@@ -163,6 +174,19 @@ complete).
   as the literal string `"NaN"` rather than JSON `null` or an omitted key.
   This is handled explicitly before type coercion in the AEMET response
   mapping layer.
+
+## Trade-offs
+
+- **httpx vs. httpx2.** `httpx` has had no release since December 2024,
+  and its maintainers have begun stewarding `httpx2` as its continuation
+  (used internally by Starlette's own `TestClient` as of the current
+  version). We chose to keep `httpx` for the actual AEMET client, since it
+  shows no deprecation notice on its own PyPI listing and is what this
+  project's requirements specify; `httpx2` is used only as a dev
+  dependency, to satisfy `TestClient`. This trades a small amount of
+  forward-risk (building on a library with a long release gap) for
+  avoiding an unverified migration onto a very recently released
+  successor package under real project time constraints.
 
 ## Assumptions Requiring Future Verification
 
