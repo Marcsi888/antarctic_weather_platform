@@ -43,3 +43,24 @@ strict = true
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's Query(...)/Depends(...) as a parameter default is the
+# framework's documented idiom for declaring query-parameter metadata and
+# dependencies; FastAPI inspects these calls at import time rather than
+# reusing one evaluated instance across requests, so B008's usual concern
+# (a mutable default silently shared across calls) does not apply.
+extend-immutable-calls = ["fastapi.Query", "fastapi.Depends"]
+
+[tool.ruff.lint.per-file-ignores]
+# test_domain_time.py deliberately constructs naive datetimes: they are
+# the documented input contract of to_utc_instant, which pairs a naive
+# wall-clock value with an explicit tz argument rather than accepting an
+# already-aware datetime. DTZ001 is a real guard against naive datetimes
+# elsewhere in the codebase and stays active there.
+"tests/unit/test_domain_time.py" = ["DTZ001"]
+# ObservationQuery.start/end are the one place a naive datetime is the
+# documented input contract: a wall-clock value not yet paired with a
+# timezone (see app/domain/time.py's to_utc_instant, applied later in
+# the route). DTZ007 stays active everywhere else.
+"app/api/schemas.py" = ["DTZ007"]
