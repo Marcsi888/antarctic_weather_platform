@@ -12,12 +12,34 @@ class UnknownStationError(ValidationError):
         super().__init__(f"Unknown station identifier: {identifier!r}")
 
 
+class NonexistentLocalTimeError(ValidationError):
+    """A wall-clock time that a DST spring-forward transition skips entirely."""
+
+    def __init__(self, local_datetime_str: str, timezone_name: str) -> None:
+        self.local_datetime_str = local_datetime_str
+        self.timezone_name = timezone_name
+        super().__init__(
+            f"{local_datetime_str!r} does not exist in {timezone_name} "
+            "(falls in a DST spring-forward gap)"
+        )
+
+
+class InvalidTimezoneError(ValidationError):
+    def __init__(self, timezone_name: str) -> None:
+        self.timezone_name = timezone_name
+        super().__init__(f"Unknown timezone: {timezone_name!r}")
+
+
 class AemetError(ApplicationError):
     """Base for failures originating from the AEMET integration."""
 
 
 class AemetUnavailableError(AemetError):
     """Network/timeout/5xx/429 — retrying the same request later may succeed."""
+
+
+class AemetAuthenticationError(AemetError):
+    """AEMET rejected the API key (401/403) — a configuration problem, not an outage."""
 
 
 class AemetResponseError(AemetError):
