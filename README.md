@@ -63,6 +63,14 @@ be unit tested in isolation, particularly the timezone/DST pipeline and
 aggregation functions, which are the parts of this system most sensitive to
 subtle correctness bugs.
 
+`WeatherService` (`backend/app/services/weather_service.py`) implements the
+orchestration layer: check cache coverage, call AEMET only on a miss,
+persist the result, then aggregate and return. It depends on its AEMET
+client through a `Protocol` (`AemetObservationSource`) rather than the
+concrete `AemetClient` class, so tests substitute a fake with no real HTTP
+client behind it — this is checked by mypy under strict mode, not just
+conventionally true.
+
 ## Technology Stack
 
 **Backend:** Python 3.12, FastAPI, Pydantic v2, pydantic-settings,
@@ -73,7 +81,10 @@ Starlette's `TestClient` deprecated the original) is a dev-only dependency
 used solely by the test client. The AEMET integration itself uses `httpx`,
 per the project's chosen HTTP client — see Assumptions below.
 
-**Frontend:** not yet implemented.
+**Frontend:** React 19, TypeScript (strict mode, `noUncheckedIndexedAccess`),
+Vite, Vitest, ESLint with `typescript-eslint`'s `strictTypeChecked` preset.
+ESLint was chosen over Vite's newer default scaffold linter (`oxlint`) for
+reviewer familiarity; both are legitimate current choices.
 
 ## Repository Structure
 
@@ -81,24 +92,41 @@ per the project's chosen HTTP client — see Assumptions below.
 antarctic_weather_platform/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py              # FastAPI app factory, health check
-│   │   └── core/
-│   │       ├── config.py        # environment-driven application settings
-│   │       ├── logging.py       # root logger configuration
-│   │       └── exceptions.py    # application exception hierarchy
+│   │   ├── main.py                     # FastAPI app factory, lifespan, health check
+│   │   ├── core/
+│   │   │   ├── config.py               # environment-driven application settings
+│   │   │   ├── logging.py              # root logger configuration
+│   │   │   └── exceptions.py           # application exception hierarchy
+│   │   ├── domain/
+│   │   │   ├── time.py                 # timezone/DST conversion pipeline
+│   │   │   └── aggregation.py          # hourly/daily/monthly bucketing
+│   │   ├── integrations/
+│   │   │   └── aemet/
+│   │   │       ├── client.py           # AEMET HTTP client (two-step flow)
+│   │   │       └── schemas.py          # transport DTOs + domain mapping
+│   │   ├── db/
+│   │   │   ├── models.py               # SQLAlchemy schema
+│   │   │   ├── session.py              # engine/session lifecycle
+│   │   │   └── repository.py           # cache hit/miss, reads, writes
+│   │   ├── services/
+│   │   │   └── weather_service.py      # cache -> AEMET -> aggregate orchestration
+│   │   └── api/
+│   │       ├── schemas.py              # request/response wire models
+│   │       ├── dependencies.py         # FastAPI dependency injection
+│   │       ├── error_handlers.py       # exception -> HTTP status mapping
+│   │       └── routes/
+│   │           └── observations.py     # GET /observations
 │   ├── tests/
-│   │   └── unit/
-│   │       ├── test_config.py
-│   │       ├── test_exceptions.py
-│   │       ├── test_logging.py
-│   │       └── test_main.py
+│   │   ├── fixtures/                   # real captured AEMET responses
+│   │   ├── unit/
+│   │   └── integration/                # full app, mocked AEMET HTTP only
 │   └── pyproject.toml
 ├── docs/
 │   └── development-plan.md
 └── README.md
 ```
 
-This will grow as domain, API, persistence, and frontend layers are added.
+This will grow as persistence evolves and the frontend layer is added.
 
 ## Setup
 
@@ -157,6 +185,12 @@ complete).
   timezone supplied. This is a fixed requirement, not a default.
 - **Aggregation boundaries.** Hourly/daily/monthly buckets are drawn using
   `Europe/Madrid` calendar boundaries, consistent with the output timezone.
+- **Timezone input formats.** Two forms are accepted: an IANA name
+  (`Europe/Berlin`), which carries a DST rule and varies by calendar date,
+  or a fixed UTC offset (`+02:00`, `-05:30`), which carries no DST logic
+  at all — it is that many hours from UTC on every date supplied. A
+  caller using the offset form is opting out of DST reasoning explicitly;
+  the two are not interchangeable representations of the same thing.
 - **Browser timezone convenience default.** The frontend will pre-fill the
   timezone field using the browser's local timezone
   (`Intl.DateTimeFormat().resolvedOptions().timeZone`) as an editable
@@ -165,15 +199,231 @@ complete).
   this system.
 - **Data quality filtering.** AEMET flags each observation with `qdato`
   (0 = good, 1 = bad quality), a field discovered during live API
-  verification rather than specified in the original requirements.
-  Observations with `qdato = 1` are excluded from aggregated (hourly/
-  daily/monthly) results but retained in storage and in unaggregated
-  responses, since a flagged-bad reading is not a trustworthy input to a
-  mean.
+  verification rather than specified in the original requirements. A
+  measurement value is never surfaced as trustworthy anywhere in the API
+  if its `qdato = 1`: the underlying observation is retained in SQLite
+  (the cache is a faithful copy of what AEMET sent), but both aggregated
+  (hourly/daily/monthly) results and unaggregated ("None" aggregation)
+  responses report `null` for that measurement rather than the flagged
+  value.
 - **Missing-value sentinel.** AEMET represents inapplicable/missing fields
   as the literal string `"NaN"` rather than JSON `null` or an omitted key.
   This is handled explicitly before type coercion in the AEMET response
   mapping layer.
+
+## Timezone and DST Handling
+
+`backend/app/domain/time.py` isolates all timezone conversion from the
+AEMET client, persistence, and API layers. It distinguishes:
+
+- a **naive wall-clock value** (what a user types — meaningless without a
+  timezone),
+- a **named timezone** (`zoneinfo.ZoneInfo`, an IANA DST rule set, not a
+  fixed offset),
+- the **UTC instant** that pair resolves to, and
+- the **Europe/Madrid output representation** of that instant.
+
+Two DST hazards are handled explicitly rather than left to Python's
+defaults:
+
+- **Nonexistent local times** (the hour skipped during a spring-forward
+  transition — e.g. `2026-03-29T02:30:00` never occurs in Europe/Madrid)
+  raise `NonexistentLocalTimeError` rather than silently resolving to
+  whatever offset Python's `fold` default happens to produce.
+- **Ambiguous local times** (the hour repeated during a fall-back
+  transition — e.g. `2026-10-25T02:30:00` occurs twice, at `+02:00` and
+  again at `+01:00`) resolve deterministically to the first (pre-
+  transition) occurrence, as a documented convention rather than an
+  implicit default.
+
+Both transition dates were verified empirically against Python's own
+`zoneinfo` (IANA tz database) for 2026, not assumed, and both are covered
+by tests anchored to those exact dates.
+
+## Aggregation Strategy
+
+`backend/app/domain/aggregation.py` groups observations into calendar
+buckets using their **Europe/Madrid** local representation, not their raw
+UTC timestamp. A daily or monthly boundary drawn in UTC would split
+observations that belong to the same Madrid calendar day whenever Madrid's
+UTC offset is nonzero — which is always, since Madrid is never UTC+0. This
+is tested directly: two observations 1 hour apart in UTC, straddling
+midnight Madrid time, land in different daily buckets; the same test
+repeated across the March 2026 DST transition confirms the bucket key is
+computed from the local calendar date, not from a fixed-offset UTC split.
+
+Each measurement's bucket value is the arithmetic mean of that bucket's
+good-quality (`qdato = 0`), non-missing readings:
+
+```
+x̄ = (1/n) · Σ xᵢ,  i = 1..n
+```
+
+The mean is a reasonable summary of a continuous physical quantity
+(temperature, pressure, wind speed) sampled at roughly regular ~10-minute
+intervals — it is the standard estimator of a signal's typical value over
+an interval. It is explicitly **not** a complete summary: averaging wind
+speed discards gust information (a bucket with one strong gust and mostly
+calm air can share a mean with a bucket of steady moderate wind) and
+direction is not modeled at all. A bucket where every reading is missing
+or quality-flagged reports `null` for that measurement, not `0.0` — zero
+would be a real, incorrect physical value, whereas `null` correctly means
+"no valid data."
+
+Grouping and reduction are both O(n) in the number of raw observations,
+which is the relevant complexity for a client-facing query over a
+bounded date range at ~10-minute granularity (at most a few thousand
+points).
+
+Buckets are only produced for calendar periods that contain at least one
+raw observation — a gap in AEMET's data (a missing hour, or a station
+outage) produces no row for that period, rather than a null-filled
+placeholder row. This keeps the aggregation function's contract simple
+(it only needs the observations, not the originally requested range) and
+avoids fabricating rows the source data never touched; a chart consuming
+this data should not assume a continuous, gap-free time axis.
+
+## Database and Cache Strategy
+
+Two SQLite tables (`backend/app/db/models.py`), each with a purpose
+derived from what actually needs to be tracked:
+
+**`observations`** — the identity of a meteorological observation is
+`(station, observed_at)`: the same station measuring at the same instant
+is the same observation by definition. This is enforced as a real database
+constraint (`UNIQUE(station, observed_at)`), not just an application-level
+convention, so a bug in the caching logic would surface as an integrity
+error rather than silently duplicating rows. The same composite also
+serves as the lookup index, since every real query is "observations for
+station X between times A and B."
+
+**`fetched_ranges`** — records that AEMET was queried for a given
+`(station, range)`, independent of whether that query returned any
+observations. This is necessary because AEMET's Antarctic dataset updates
+annually: a recent date range legitimately has zero observations, and
+without a separate record of "we asked and got nothing," that would be
+indistinguishable from "we never asked," causing the cache to re-query
+AEMET on every request for that range.
+
+**Cache hit logic**, following interval reasoning: for a requested range
+*R* on a given station, the cache is checked against previously fetched
+ranges *C*. The current implementation checks whether *R* is fully
+contained within a single prior fetched range — not a general union of
+multiple overlapping fetched ranges (*R \\ C* as a true set difference
+across many stored intervals). A request spanning two previously fetched
+but non-adjacent ranges is treated as a miss and the full range is
+refetched. This is a deliberate scope decision: single-range containment
+covers the actual usage pattern (a user submitting and refining one query)
+without the complexity of interval-tree merging, which correctness and
+explainability don't require here.
+
+Sessions are scoped with a context manager (`session_scope`) that commits
+on success and rolls back on any exception, so a partially-applied write
+is never left in the database.
+
+Two SQLite-specific correctness issues surfaced during testing and are
+worth recording, since both would have been silent data bugs rather than
+crashes:
+
+- SQLite's `DATETIME` column has no timezone concept, so SQLAlchemy
+  silently returns naive `datetime` objects on read even when an
+  aware value was written — a round-trip test caught this
+  (`observed_at` came back missing `tzinfo`). `UTCDateTime`, a small
+  `TypeDecorator`, re-attaches UTC on load; every datetime this
+  application persists is UTC by construction, so this is a correctness
+  fix, not an assumption of convenience.
+- `Session.merge()` upserts on the ORM primary key, not on any other
+  unique constraint — an idempotency test caught that re-fetching an
+  overlapping range raised `IntegrityError` instead of updating the
+  existing row, because every freshly constructed `ObservationRecord` has
+  no primary key set and so was always treated as an insert. The fix uses
+  an explicit `INSERT ... ON CONFLICT (station, observed_at) DO UPDATE`,
+  which targets the actual business key.
+
+**Production evolution path** (not implemented, since nothing here
+requires it yet): PostgreSQL in place of SQLite for concurrent write
+access, Alembic for schema migrations once the schema has a real change
+history, a background worker performing scheduled ingestion instead of
+fetching on request, and Redis as a hot-path cache in front of the
+database if query volume ever justified it.
+
+## AEMET Integration Notes
+
+- The client performs at most one retry, only for connection/timeout
+  failures and 5xx responses, with a short fixed delay (not exponential
+  backoff — this is a single-user local application, not a system under
+  concurrent load). 429 (rate limit) and other 4xx responses are never
+  retried automatically: retrying a rate-limited request immediately
+  would make the problem worse, and retrying a client error would fail
+  identically.
+- 401/403 (bad or missing API key) raises `AemetAuthenticationError`, kept
+  distinct from `AemetUnavailableError`, since a rejected key is a
+  configuration problem, not a transient outage — conflating the two would
+  make "should I retry?" logic upstream give the wrong answer.
+- AEMET's 404 for an empty date range is treated as a successful empty
+  result (`[]`), not an exception, consistent with the annual update
+  cadence noted above.
+- The `datos` URL returned in step one is a pre-signed link and does not
+  take the `api_key` header — verified against the live API, not assumed.
+
+## Backend API
+
+### `GET /observations`
+
+| Query parameter | Required | Notes |
+|---|---|---|
+| `station` | yes | `gabriel_de_castilla` or `juan_carlos_i` |
+| `start` | yes | `YYYY-MM-DDTHH:MM:SS`, local to `timezone` (no UTC offset accepted) |
+| `end` | yes | Same format; must be after `start` |
+| `timezone` | no | IANA name (`Europe/Berlin`) or fixed UTC offset (`+02:00`, `-05:30`); defaults to `Europe/Madrid` if omitted |
+| `aggregation` | no | `none` (default), `hourly`, `daily`, or `monthly` |
+| `measurement` | no | Repeat to select multiple (`temperature`, `pressure`, `speed`); omit entirely to receive all three |
+
+Response is a JSON array; each element's `datetime` is Europe/Madrid with
+an explicit UTC offset, and any measurement not requested is `null` rather
+than omitted, keeping the response shape uniform regardless of selection.
+
+Validation failures (unknown station, `start >= end`, malformed datetime,
+an offset-bearing datetime where none is accepted, an unrecognized
+timezone name) return `400` with a message describing the problem.
+Failures in FastAPI's own request-shape validation (a missing required
+parameter, for instance) return `422`, distinct from this application's
+own domain validation. Upstream/persistence failures return `502` or
+`500` — see Error Handling below.
+
+### `GET /health`
+
+Returns `{"status": "ok"}`. Used by Docker's healthcheck and as a smoke
+test that the app booted (settings loaded, database schema created)
+without requiring a real AEMET call.
+
+### Error Handling
+
+A single exception handler (`backend/app/api/error_handlers.py`) maps
+the application's exception hierarchy to HTTP status codes in one place,
+rather than scattering `try`/`except` across routes:
+
+| Exception | Status | Reasoning |
+|---|---|---|
+| `ValidationError` and subclasses | 400 | Caller-supplied input is invalid |
+| `AemetAuthenticationError` | 500 | Server misconfiguration (bad AEMET key), not the caller's fault |
+| `AemetError` (other subclasses) | 502 | This service is a proxy to AEMET; an upstream failure is a bad-gateway condition |
+| `PersistenceError` | 500 | Local database failure |
+| Anything else | 500 | Unexpected — logged in full server-side |
+
+For any `5xx` response, the response body is a generic message; the real
+exception detail (which may name an internal table, config variable, or
+upstream URL) is logged server-side only, never returned to the caller.
+
+### Connection Reuse
+
+The `httpx.AsyncClient` used for AEMET requests and the SQLite engine are
+both constructed once, in a FastAPI `lifespan` context manager, and
+reused across every request via `app.state` — not rebuilt per request.
+Rebuilding the HTTP client per request would mean paying a new TCP+TLS
+handshake to AEMET on every call instead of reusing a pooled connection,
+which is the concrete mechanism behind "connection reuse" as a resilience
+property, not just a phrase.
 
 ## Trade-offs
 
