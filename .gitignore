@@ -1,3 +1,15 @@
+# LaTeX build artifacts (the compiled report.pdf is committed; these are not)
+*.aux
+*.out
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.bbl
+*.bcf
+*.blg
+*.run.xml
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
