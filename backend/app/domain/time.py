@@ -19,14 +19,10 @@ def resolve_timezone(name: str) -> ZoneInfo:
 
 
 def to_utc_instant(local_dt: datetime, tz: ZoneInfo) -> datetime:
-    """Resolve a naive wall-clock datetime in `tz` to an unambiguous UTC instant.
+    """Resolve naive wall-clock `local_dt` in `tz` to a UTC instant.
 
-    Ambiguous local times (the repeated hour during a fall-back DST
-    transition) are resolved to their first occurrence — the pre-transition,
-    DST-active offset — rather than relying on Python's implicit fold=0
-    default. Nonexistent local times (the skipped hour during a
-    spring-forward transition) raise, since there is no correct instant to
-    return: the caller typed a wall-clock time that never occurred.
+    Ambiguous (fall-back) times resolve to their first occurrence.
+    Nonexistent (spring-forward) times raise NonexistentLocalTimeError.
     """
     if local_dt.tzinfo is not None:
         raise ValueError("to_utc_instant expects a naive datetime; tz is supplied separately")

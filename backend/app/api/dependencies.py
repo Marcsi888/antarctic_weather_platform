@@ -11,13 +11,8 @@ from app.services.weather_service import WeatherService
 
 
 def get_weather_service(request: Request) -> WeatherService:
-    """Constructs a WeatherService from objects the lifespan attached to
-    app.state (the shared httpx.AsyncClient) plus fresh, cheap objects
-    (session factory, repository) built per request. The SQLite engine
-    itself is also lifespan-scoped: it owns no long-lived connection by
-    default, but re-running schema creation and file-existence checks on
-    every request would be wasted work for no benefit.
-    """
+    # Reuses the lifespan-scoped httpx client and SQLite engine from
+    # app.state; only the cheap per-request objects are built fresh here.
     settings: Settings = request.app.state.settings
     http_client: httpx.AsyncClient = request.app.state.http_client
 

@@ -6,11 +6,8 @@ _DATE_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 
 
 def configure_logging(level: str) -> None:
-    """Configure the root logger once, at application startup.
-
-    Every other module should call `logging.getLogger(__name__)` and log
-    through that, rather than configuring handlers of its own.
-    """
+    """Configure the root logger once, at startup; other modules should
+    only call logging.getLogger(__name__), never configure their own."""
     root = logging.getLogger()
     root.setLevel(level)
 
