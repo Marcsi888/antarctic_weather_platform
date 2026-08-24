@@ -10,10 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class AemetObservationSource(Protocol):
-    """What WeatherService needs from an AEMET client — not the concrete
-    AemetClient, so tests can substitute a fake with no real HTTP client,
-    retry logic, or httpx dependency behind it at all.
-    """
+    """The subset of AemetClient this service needs, lets tests substitute a fake with no real HTTP client behind it."""
 
     async def get_observations(
         self, station: Station, start: datetime, end: datetime
@@ -21,16 +18,10 @@ class AemetObservationSource(Protocol):
 
 
 class WeatherService:
-    """Orchestrates cache lookup, AEMET retrieval, and aggregation.
+    """Orchestrates cache lookup, AEMET retrieval, and aggregation."""
 
-    Depends on AemetObservationSource and ObservationRepository through
-    their constructors rather than constructing them itself, so tests can
-    substitute fakes for both without any real HTTP call or database.
-    Exceptions from either collaborator propagate unchanged — mapping
-    them to HTTP responses is the API layer's responsibility, not this
-    one's, which is why this class has no FastAPI dependency at all.
-    """
-
+    # Exceptions from either collaborator propagate unchanged; mapping
+    # them to HTTP responses is the API layer's job, not this one's.
     def __init__(
         self, aemet_client: AemetObservationSource, repository: ObservationRepository
     ) -> None:

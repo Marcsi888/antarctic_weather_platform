@@ -10,12 +10,7 @@ class Station(Enum):
 
 
 class AemetEnvelope(BaseModel):
-    """The first-step response from the antartida/datos endpoint.
-
-    AEMET's API is a two-step indirection: this call never returns
-    observations directly, only URLs to fetch them from (see `datos`)
-    and to fetch their field descriptions from (see `metadatos`).
-    """
+    """Step-one response: never data itself, only URLs to fetch it from."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -26,15 +21,9 @@ class AemetEnvelope(BaseModel):
 
 
 class AemetObservationDTO(BaseModel):
-    """One record from the `datos` URL, as AEMET actually sends it.
-
-    AEMET's payload carries ~25 fields (humidity, wind direction, solar
-    radiation, soil temperature...) and the field set differs by station
-    type; only the fields this application needs are declared here, and
-    everything else is dropped by `extra="ignore"` rather than rejected.
-    Fields AEMET doesn't measure for a given station/interval appear as
-    the literal string "NaN", not JSON null or a missing key.
-    """
+    """One `datos` record. AEMET sends ~25 fields that vary by station
+    type; only the ones this app needs are declared, rest dropped via
+    extra="ignore". Unmeasured fields are the string "NaN", not null."""
 
     model_config = ConfigDict(extra="ignore")
 

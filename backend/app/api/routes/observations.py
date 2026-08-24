@@ -37,7 +37,11 @@ async def get_observations(
     start: str = Query(..., description="YYYY-MM-DDTHH:MM:SS, local to `timezone`"),
     end: str = Query(..., description="YYYY-MM-DDTHH:MM:SS, local to `timezone`"),
     timezone: str | None = Query(
-        None, description="IANA timezone name; defaults to Europe/Madrid if omitted"
+        None,
+        description=(
+            "IANA timezone name (e.g. Europe/Berlin) or a fixed UTC offset "
+            "(e.g. +02:00, -05:30); defaults to Europe/Madrid if omitted"
+        ),
     ),
     aggregation: AggregationLevel = Query(AggregationLevel.NONE),
     measurement: list[Measurement] | None = Query(
