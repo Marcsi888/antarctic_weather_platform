@@ -179,6 +179,7 @@ def test_zero_measurements_returns_all_three(client: TestClient, httpx_mock: HTT
     assert body["temperature_celsius"] is not None
     assert body["pressure_hpa"] is not None
     assert body["wind_speed_ms"] is not None
+    assert body["wind_speed_max_ms"] is not None
 
 
 def test_single_measurement_selection_nulls_the_others(
@@ -213,6 +214,51 @@ def test_single_measurement_selection_nulls_the_others(
     assert body["temperature_celsius"] == 1.4
     assert body["pressure_hpa"] is None
     assert body["wind_speed_ms"] is None
+    assert body["wind_speed_max_ms"] is None
+
+
+def test_wind_speed_max_reflects_gust_hidden_by_the_mean(
+    client: TestClient, httpx_mock: HTTPXMock
+) -> None:
+    # Confirmed with the assigning team: turbine operation has minimum,
+    # maximum, and optimal wind-speed thresholds, so a mean alone can
+    # conceal a gust relevant to a wind-farm feasibility assessment.
+    _mock_aemet_success(
+        httpx_mock,
+        [
+            {
+                "identificacion": "89070",
+                "fhora": "2024-01-15T00:00:00Z",
+                "temp": 1.0,
+                "pres": 980.0,
+                "vel": 4.0,
+                "qdato": 0.0,
+            },
+            {
+                "identificacion": "89070",
+                "fhora": "2024-01-15T00:10:00Z",
+                "temp": 1.0,
+                "pres": 980.0,
+                "vel": 14.0,
+                "qdato": 0.0,
+            },
+        ],
+    )
+
+    response = client.get(
+        "/observations",
+        params={
+            "station": "gabriel_de_castilla",
+            "start": "2024-01-15T00:00:00",
+            "end": "2024-01-15T01:00:00",
+            "timezone": "UTC",
+            "aggregation": "hourly",
+        },
+    )
+
+    body = response.json()[0]
+    assert body["wind_speed_ms"] == 9.0
+    assert body["wind_speed_max_ms"] == 14.0
 
 
 def test_second_request_for_same_range_does_not_call_aemet_again(

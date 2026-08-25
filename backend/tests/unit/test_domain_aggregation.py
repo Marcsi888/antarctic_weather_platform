@@ -14,6 +14,7 @@ def _obs(
     day: int = 15,
     month: int = 1,
     temp: float | None = 1.0,
+    wind: float | None = 5.0,
     good: bool = True,
 ) -> StationObservation:
     return StationObservation(
@@ -21,7 +22,7 @@ def _obs(
         observed_at=datetime(2026, month, day, hour, minute, tzinfo=UTC),
         temperature_celsius=temp,
         pressure_hpa=980.0,
-        wind_speed_ms=5.0,
+        wind_speed_ms=wind,
         is_good_quality=good,
     )
 
@@ -163,3 +164,51 @@ def test_aggregation_bucket_start_is_europe_madrid() -> None:
 def test_empty_observation_list_returns_empty_result() -> None:
     assert aggregate([], AggregationLevel.HOURLY) == []
     assert aggregate([], AggregationLevel.NONE) == []
+
+
+def test_aggregation_reports_wind_speed_max_alongside_mean() -> None:
+    # Confirmed with the assigning team: turbine operation has minimum,
+    # maximum, and optimal wind-speed thresholds, so the mean alone can
+    # conceal a gust that matters for a feasibility assessment.
+    observations = [
+        _obs(13, 0, wind=4.0),
+        _obs(13, 10, wind=12.0),  # the gust
+        _obs(13, 20, wind=6.0),
+    ]
+
+    result = aggregate(observations, AggregationLevel.HOURLY)
+
+    assert result[0].wind_speed_ms == (4.0 + 12.0 + 6.0) / 3
+    assert result[0].wind_speed_max_ms == 12.0
+
+
+def test_aggregation_wind_speed_max_excludes_bad_quality_readings() -> None:
+    observations = [
+        _obs(13, 0, wind=5.0, good=True),
+        _obs(13, 10, wind=500.0, good=False),  # sensor fault, flagged
+    ]
+
+    result = aggregate(observations, AggregationLevel.HOURLY)
+
+    assert result[0].wind_speed_max_ms == 5.0
+
+
+def test_aggregation_wind_speed_max_is_none_when_no_valid_readings() -> None:
+    observations = [_obs(13, 0, wind=None), _obs(13, 10, wind=None)]
+
+    result = aggregate(observations, AggregationLevel.HOURLY)
+
+    assert result[0].wind_speed_max_ms is None
+
+
+def test_none_aggregation_wind_speed_max_equals_the_single_reading() -> None:
+    result = aggregate([_obs(13, 0, wind=7.5)], AggregationLevel.NONE)
+
+    assert result[0].wind_speed_ms == 7.5
+    assert result[0].wind_speed_max_ms == 7.5
+
+
+def test_none_aggregation_nulls_wind_speed_max_for_bad_quality() -> None:
+    result = aggregate([_obs(13, 0, wind=99.0, good=False)], AggregationLevel.NONE)
+
+    assert result[0].wind_speed_max_ms is None

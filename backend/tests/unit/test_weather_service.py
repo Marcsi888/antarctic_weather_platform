@@ -19,11 +19,13 @@ class FakeAemetClient:
     def __init__(self, observations: list[StationObservation]) -> None:
         self._observations = observations
         self.call_count = 0
+        self.requested_ranges: list[tuple[datetime, datetime]] = []
 
     async def get_observations(
         self, station: Station, start: datetime, end: datetime
     ) -> list[StationObservation]:
         self.call_count += 1
+        self.requested_ranges.append((start, end))
         return self._observations
 
 
@@ -135,3 +137,83 @@ async def test_empty_aemet_response_persists_range_as_fetched(
         Station.GABRIEL_DE_CASTILLA, start, end, AggregationLevel.NONE
     )
     assert fake_client.call_count == 1
+
+
+async def test_range_over_31_days_is_split_into_multiple_aemet_calls(
+    repository: ObservationRepository,
+) -> None:
+    # AEMET rejects any single request spanning more than ~31 days
+    # ("El rango de fechas no puede ser superior a 1 mes"), confirmed
+    # live against the real API. A full-year request must become
+    # multiple sub-31-day calls, not one oversized call.
+    fake_client = FakeAemetClient([_obs(0)])
+    service = WeatherService(fake_client, repository)
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+    end = datetime(2025, 1, 1, tzinfo=UTC)
+
+    await service.get_observations(Station.GABRIEL_DE_CASTILLA, start, end, AggregationLevel.NONE)
+
+    assert fake_client.call_count > 1
+    for chunk_start, chunk_end in fake_client.requested_ranges:
+        assert (chunk_end - chunk_start).days <= 31
+
+
+async def test_chunked_range_has_no_gaps_or_overlaps(
+    repository: ObservationRepository,
+) -> None:
+    fake_client = FakeAemetClient([_obs(0)])
+    service = WeatherService(fake_client, repository)
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+    end = datetime(2025, 1, 1, tzinfo=UTC)
+
+    await service.get_observations(Station.GABRIEL_DE_CASTILLA, start, end, AggregationLevel.NONE)
+
+    ranges = fake_client.requested_ranges
+    assert ranges[0][0] == start
+    assert ranges[-1][1] == end
+    for i in range(len(ranges) - 1):
+        assert ranges[i][1] == ranges[i + 1][0]
+
+
+async def test_range_under_31_days_is_a_single_aemet_call(
+    repository: ObservationRepository,
+) -> None:
+    fake_client = FakeAemetClient([_obs(0)])
+    service = WeatherService(fake_client, repository)
+
+    await service.get_observations(
+        Station.GABRIEL_DE_CASTILLA,
+        datetime(2024, 1, 1, tzinfo=UTC),
+        datetime(2024, 1, 15, tzinfo=UTC),
+        AggregationLevel.NONE,
+    )
+
+    assert fake_client.call_count == 1
+
+
+async def test_already_cached_chunk_within_a_large_range_is_not_refetched(
+    repository: ObservationRepository,
+) -> None:
+    # A prior smaller fetch inside a later, larger request's span should
+    # still yield a partial cache benefit: chunking must check the cache
+    # per sub-range, not force a full re-fetch of everything.
+    repository.store_fetch_result(
+        Station.GABRIEL_DE_CASTILLA,
+        datetime(2024, 1, 1, tzinfo=UTC),
+        datetime(2024, 2, 1, tzinfo=UTC),
+        [_obs(0)],
+    )
+    fake_client = FakeAemetClient([_obs(0)])
+    service = WeatherService(fake_client, repository)
+
+    await service.get_observations(
+        Station.GABRIEL_DE_CASTILLA,
+        datetime(2024, 1, 1, tzinfo=UTC),
+        datetime(2024, 3, 3, tzinfo=UTC),
+        AggregationLevel.NONE,
+    )
+
+    # Only the second month-sized chunk should have required a real
+    # AEMET call; the first was already cached.
+    assert fake_client.call_count == 1
+    assert fake_client.requested_ranges[0][0] == datetime(2024, 2, 1, tzinfo=UTC)

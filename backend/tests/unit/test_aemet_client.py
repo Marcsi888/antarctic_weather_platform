@@ -1,3 +1,5 @@
+import asyncio
+import time
 from datetime import UTC, datetime
 
 import httpx
@@ -6,6 +8,7 @@ from pytest_httpx import HTTPXMock
 
 from app.core.exceptions import (
     AemetAuthenticationError,
+    AemetRangeTooLongError,
     AemetResponseError,
     AemetUnavailableError,
     UnknownStationError,
@@ -37,6 +40,7 @@ def client() -> AemetClient:
         api_key="test-key",
         base_url=BASE_URL,
         retry_delay_seconds=0,
+        min_request_interval_seconds=0,
     )
 
 
@@ -101,6 +105,41 @@ async def test_get_observations_404_returns_empty_list(
     assert observations == []
 
 
+async def test_get_observations_embedded_404_returns_empty_list(
+    client: AemetClient, httpx_mock: HTTPXMock
+) -> None:
+    # Confirmed live against AEMET: a range with no data can come back as
+    # HTTP 200 with estado: 404 embedded in the body, not only as a real
+    # HTTP 404 status. Both must be treated as "no data", not as a
+    # malformed envelope (missing datos/metadatos).
+    httpx_mock.add_response(
+        url=_envelope_url(Station.GABRIEL_DE_CASTILLA),
+        status_code=200,
+        json={"descripcion": "No hay datos que satisfagan esos criterios", "estado": 404},
+    )
+
+    observations = await client.get_observations(Station.GABRIEL_DE_CASTILLA, START, END)
+
+    assert observations == []
+
+
+async def test_get_observations_range_too_long_raises_distinct_error(
+    client: AemetClient, httpx_mock: HTTPXMock
+) -> None:
+    # Confirmed live: AEMET rejects requests over ~31 days with the same
+    # estado: 404 wrapper used for a genuine empty result, distinguished
+    # only by the descripcion text. Must not be silently treated as "no
+    # data" — this is a rejected request, not an empty one.
+    httpx_mock.add_response(
+        url=_envelope_url(Station.GABRIEL_DE_CASTILLA),
+        status_code=200,
+        json={"descripcion": "El rango de fechas no puede ser superior a 1 mes", "estado": 404},
+    )
+
+    with pytest.raises(AemetRangeTooLongError):
+        await client.get_observations(Station.GABRIEL_DE_CASTILLA, START, END)
+
+
 async def test_get_observations_401_raises_authentication_error(
     client: AemetClient, httpx_mock: HTTPXMock
 ) -> None:
@@ -117,6 +156,29 @@ async def test_get_observations_429_raises_unavailable_error(
 
     with pytest.raises(AemetUnavailableError):
         await client.get_observations(Station.GABRIEL_DE_CASTILLA, START, END)
+
+
+async def test_429_extends_the_throttle_beyond_the_baseline_interval(
+    httpx_mock: HTTPXMock,
+) -> None:
+    # A real 429 is direct evidence of the actual limit; the client should
+    # become more conservative afterward, not just report the error and
+    # continue at the same baseline pace.
+    http_client = httpx.AsyncClient(timeout=10.0)
+    throttled_client = AemetClient(
+        http_client=http_client,
+        api_key="test-key",
+        base_url=BASE_URL,
+        retry_delay_seconds=0,
+        min_request_interval_seconds=0.05,
+    )
+    httpx_mock.add_response(url=_envelope_url(Station.GABRIEL_DE_CASTILLA), status_code=429)
+
+    with pytest.raises(AemetUnavailableError):
+        await throttled_client.get_observations(Station.GABRIEL_DE_CASTILLA, START, END)
+
+    wait_seconds = throttled_client._next_allowed_time - time.monotonic()
+    assert wait_seconds > 0.05  # cooldown, not just the baseline interval
 
 
 async def test_get_observations_retries_once_on_500_then_succeeds(
@@ -239,6 +301,16 @@ def test_default_retry_delay_is_nonzero() -> None:
     assert default_client._retry_delay_seconds > 0
 
 
+def test_default_min_request_interval_is_nonzero() -> None:
+    # Same reasoning as test_default_retry_delay_is_nonzero: the test
+    # fixture's min_request_interval_seconds=0 override must not be
+    # mistaken for a change to the conservative production default.
+    http_client = httpx.AsyncClient(timeout=10.0)
+    default_client = AemetClient(http_client=http_client, api_key="k", base_url=BASE_URL)
+
+    assert default_client._min_request_interval_seconds > 0
+
+
 async def test_get_observations_datetime_formatted_with_utc_suffix(
     client: AemetClient, httpx_mock: HTTPXMock
 ) -> None:
@@ -255,3 +327,60 @@ async def test_get_observations_datetime_formatted_with_utc_suffix(
     request_url = str(httpx_mock.get_requests()[0].url)
     assert "2024-01-15T00:00:00UTC" in request_url
     assert "2024-01-15T06:00:00UTC" in request_url
+
+
+async def test_throttle_delays_back_to_back_requests(httpx_mock: HTTPXMock) -> None:
+    interval = 0.2
+    http_client = httpx.AsyncClient(timeout=10.0)
+    throttled_client = AemetClient(
+        http_client=http_client,
+        api_key="test-key",
+        base_url=BASE_URL,
+        retry_delay_seconds=0,
+        min_request_interval_seconds=interval,
+    )
+    httpx_mock.add_response(
+        url=_envelope_url(Station.GABRIEL_DE_CASTILLA),
+        json={"descripcion": "exito", "estado": 200, "datos": DATOS_URL, "metadatos": "x"},
+    )
+    httpx_mock.add_response(url=DATOS_URL, json=[])
+    # get_observations issues two real requests (envelope, then datos); the
+    # second must be delayed by at least one throttle interval relative to
+    # the first, since both pass through the same client instance.
+    start_time = time.monotonic()
+    await throttled_client.get_observations(Station.GABRIEL_DE_CASTILLA, START, END)
+    elapsed = time.monotonic() - start_time
+
+    assert elapsed >= interval
+
+
+async def test_throttle_serializes_concurrent_requests(httpx_mock: HTTPXMock) -> None:
+    interval = 0.2
+    http_client = httpx.AsyncClient(timeout=10.0)
+    throttled_client = AemetClient(
+        http_client=http_client,
+        api_key="test-key",
+        base_url=BASE_URL,
+        retry_delay_seconds=0,
+        min_request_interval_seconds=interval,
+    )
+    for _ in range(3):
+        httpx_mock.add_response(
+            url=_envelope_url(Station.GABRIEL_DE_CASTILLA),
+            json={"descripcion": "exito", "estado": 200, "datos": DATOS_URL, "metadatos": "x"},
+        )
+        httpx_mock.add_response(url=DATOS_URL, json=[])
+
+    # Three concurrent logical requests (6 real HTTP calls total) must
+    # still be spaced by the throttle: an unsynchronized check-then-sleep
+    # would let concurrent callers race past the gate together.
+    start_time = time.monotonic()
+    await asyncio.gather(
+        *(
+            throttled_client.get_observations(Station.GABRIEL_DE_CASTILLA, START, END)
+            for _ in range(3)
+        )
+    )
+    elapsed = time.monotonic() - start_time
+
+    assert elapsed >= interval * 5  # 6 requests -> 5 gaps, at minimum
