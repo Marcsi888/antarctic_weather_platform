@@ -73,6 +73,9 @@ local_settings.py
 db.sqlite3
 db.sqlite3-journal
 
+# Application SQLite cache (runtime-generated, rebuilt on first request)
+backend/data/
+
 # Flask stuff:
 instance/
 .webassets-cache
