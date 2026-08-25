@@ -63,18 +63,25 @@ class ObservationResponse(BaseModel):
     temperature_celsius: float | None = None
     pressure_hpa: float | None = None
     wind_speed_ms: float | None = None
+    # Alongside the mean, not a separately selectable measurement: turbine
+    # power generation has minimum, maximum, and optimal operating wind
+    # speeds, confirmed with the assigning team, so a mean alone can
+    # conceal operationally significant behavior a feasibility study needs.
+    wind_speed_max_ms: float | None = None
     observation_count: int
 
 
 def to_response(
     aggregated: AggregatedObservation, measurements: frozenset[Measurement]
 ) -> ObservationResponse:
+    speed_requested = Measurement.SPEED in measurements
     return ObservationResponse(
         datetime=aggregated.bucket_start,
         temperature_celsius=(
             aggregated.temperature_celsius if Measurement.TEMPERATURE in measurements else None
         ),
         pressure_hpa=aggregated.pressure_hpa if Measurement.PRESSURE in measurements else None,
-        wind_speed_ms=aggregated.wind_speed_ms if Measurement.SPEED in measurements else None,
+        wind_speed_ms=aggregated.wind_speed_ms if speed_requested else None,
+        wind_speed_max_ms=aggregated.wind_speed_max_ms if speed_requested else None,
         observation_count=aggregated.observation_count,
     )

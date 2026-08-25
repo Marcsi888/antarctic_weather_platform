@@ -46,5 +46,17 @@ class AemetResponseError(AemetError):
     """Malformed or unexpected payload shape — retrying would fail identically."""
 
 
+class AemetRangeTooLongError(AemetError):
+    """AEMET rejects any request spanning more than ~31 days.
+
+    Confirmed empirically (undocumented): identical estado: 404 wrapper
+    to a genuine empty-result response, distinguished only by the
+    descripcion text. WeatherService splits requests to stay under this
+    limit, so this should not surface in normal operation; it exists so
+    the client fails loudly rather than silently misreporting a rejected
+    request as "no data" if that invariant is ever violated.
+    """
+
+
 class PersistenceError(ApplicationError):
     """The local SQLite cache could not be read from or written to."""

@@ -17,7 +17,16 @@ class AggregationLevel(Enum):
 
 
 class AggregatedObservation(BaseModel):
-    """One summarized bucket. bucket_start is always Europe/Madrid."""
+    """One summarized bucket. bucket_start is always Europe/Madrid.
+
+    wind_speed_max_ms exists alongside the mean specifically because
+    turbine power generation has minimum, maximum, and optimal operating
+    wind-speed thresholds (confirmed with the assigning team): a mean
+    alone can conceal a period that included wind speeds outside a
+    turbine's safe or productive range, which matters for a wind-farm
+    feasibility study in a way it would not for, e.g., reporting an
+    average temperature.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -25,6 +34,7 @@ class AggregatedObservation(BaseModel):
     temperature_celsius: float | None
     pressure_hpa: float | None
     wind_speed_ms: float | None
+    wind_speed_max_ms: float | None
     observation_count: int
 
 
@@ -58,6 +68,13 @@ def _mean(values: Iterable[float]) -> float | None:
     return sum(values) / len(values)
 
 
+def _max(values: Iterable[float]) -> float | None:
+    values = list(values)
+    if not values:
+        return None
+    return max(values)
+
+
 def aggregate(
     observations: list[StationObservation], level: AggregationLevel
 ) -> list[AggregatedObservation]:
@@ -68,6 +85,10 @@ def aggregate(
                 temperature_celsius=obs.temperature_celsius if obs.is_good_quality else None,
                 pressure_hpa=obs.pressure_hpa if obs.is_good_quality else None,
                 wind_speed_ms=obs.wind_speed_ms if obs.is_good_quality else None,
+                # A single reading's "maximum" is itself; expressed this
+                # way (not just repeating wind_speed_ms) so both fields
+                # always come from the same qdato-filtering rule.
+                wind_speed_max_ms=obs.wind_speed_ms if obs.is_good_quality else None,
                 observation_count=1,
             )
             for obs in observations
@@ -82,26 +103,29 @@ def aggregate(
         buckets[key].append(obs)
         bucket_starts.setdefault(key, _bucket_start(key, local_dt))
 
-    results = [
-        AggregatedObservation(
-            bucket_start=bucket_starts[key],
-            temperature_celsius=_mean(
-                obs.temperature_celsius
-                for obs in bucket_observations
-                if obs.is_good_quality and obs.temperature_celsius is not None
-            ),
-            pressure_hpa=_mean(
-                obs.pressure_hpa
-                for obs in bucket_observations
-                if obs.is_good_quality and obs.pressure_hpa is not None
-            ),
-            wind_speed_ms=_mean(
-                obs.wind_speed_ms
-                for obs in bucket_observations
-                if obs.is_good_quality and obs.wind_speed_ms is not None
-            ),
-            observation_count=len(bucket_observations),
+    results = []
+    for key, bucket_observations in buckets.items():
+        valid_wind_speeds = [
+            obs.wind_speed_ms
+            for obs in bucket_observations
+            if obs.is_good_quality and obs.wind_speed_ms is not None
+        ]
+        results.append(
+            AggregatedObservation(
+                bucket_start=bucket_starts[key],
+                temperature_celsius=_mean(
+                    obs.temperature_celsius
+                    for obs in bucket_observations
+                    if obs.is_good_quality and obs.temperature_celsius is not None
+                ),
+                pressure_hpa=_mean(
+                    obs.pressure_hpa
+                    for obs in bucket_observations
+                    if obs.is_good_quality and obs.pressure_hpa is not None
+                ),
+                wind_speed_ms=_mean(valid_wind_speeds),
+                wind_speed_max_ms=_max(valid_wind_speeds),
+                observation_count=len(bucket_observations),
+            )
         )
-        for key, bucket_observations in buckets.items()
-    ]
     return sorted(results, key=lambda r: r.bucket_start)

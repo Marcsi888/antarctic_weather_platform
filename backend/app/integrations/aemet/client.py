@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from datetime import datetime
 
 import httpx
@@ -7,6 +8,7 @@ from pydantic import ValidationError as PydanticValidationError
 
 from app.core.exceptions import (
     AemetAuthenticationError,
+    AemetRangeTooLongError,
     AemetResponseError,
     AemetUnavailableError,
     UnknownStationError,
@@ -31,6 +33,20 @@ _AEMET_DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%SUTC"
 _RETRYABLE_STATUS_CODES = frozenset({500, 502, 503, 504})
 _RETRY_DELAY_SECONDS = 1.0
 
+# AEMET does not publish a rate limit. Per guidance from the assigning
+# team, the correct response to an undocumented limit is to be
+# conservative rather than to guess a threshold and tune against it: a
+# minimum spacing between outbound requests, applied here rather than
+# left to callers, so every caller of this client benefits regardless of
+# how many are issuing requests concurrently.
+_MIN_REQUEST_INTERVAL_SECONDS = 0.5
+
+# A real 429 is direct evidence we are too close to whatever AEMET's
+# actual limit is; the cooldown after one is longer than the baseline
+# spacing, on the reasoning that a single documented signal about the
+# real limit is worth more than the conservative default guess.
+_RATE_LIMIT_COOLDOWN_SECONDS = 5.0
+
 
 class AemetClient:
     def __init__(
@@ -39,11 +55,19 @@ class AemetClient:
         api_key: str,
         base_url: str,
         retry_delay_seconds: float = _RETRY_DELAY_SECONDS,
+        min_request_interval_seconds: float = _MIN_REQUEST_INTERVAL_SECONDS,
     ) -> None:
         self._http_client = http_client
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._retry_delay_seconds = retry_delay_seconds
+        self._min_request_interval_seconds = min_request_interval_seconds
+        # Guards _next_allowed_time so concurrent callers cannot both
+        # observe "enough time has passed" and fire simultaneously; an
+        # unsynchronized check-then-sleep would let exactly that race
+        # defeat the throttle under concurrent use.
+        self._throttle_lock = asyncio.Lock()
+        self._next_allowed_time = 0.0
 
     async def get_observations(
         self, station: Station, start: datetime, end: datetime
@@ -96,26 +120,45 @@ class AemetClient:
         self, url: str, *, headers: dict[str, str] | None
     ) -> httpx.Response:
         try:
-            response = await self._http_client.get(url, headers=headers)
+            response = await self._throttled_get(url, headers=headers)
         except (httpx.TimeoutException, httpx.ConnectError):
             logger.warning("AEMET request timed out or failed to connect, retrying once: %s", url)
             await asyncio.sleep(self._retry_delay_seconds)
             try:
-                response = await self._http_client.get(url, headers=headers)
+                response = await self._throttled_get(url, headers=headers)
             except (httpx.TimeoutException, httpx.ConnectError) as retry_exc:
                 raise AemetUnavailableError(
                     "AEMET did not respond after retry"
                 ) from retry_exc
             return response
 
-        if response.status_code in _RETRYABLE_STATUS_CODES:
+        if response.status_code == 429:
+            self._apply_rate_limit_cooldown()
+        elif response.status_code in _RETRYABLE_STATUS_CODES:
             logger.warning(
                 "AEMET returned %s, retrying once: %s", response.status_code, url
             )
             await asyncio.sleep(self._retry_delay_seconds)
-            response = await self._http_client.get(url, headers=headers)
+            response = await self._throttled_get(url, headers=headers)
 
         return response
+
+    async def _throttled_get(
+        self, url: str, *, headers: dict[str, str] | None
+    ) -> httpx.Response:
+        async with self._throttle_lock:
+            wait_seconds = self._next_allowed_time - time.monotonic()
+            if wait_seconds > 0:
+                await asyncio.sleep(wait_seconds)
+            self._next_allowed_time = time.monotonic() + self._min_request_interval_seconds
+        return await self._http_client.get(url, headers=headers)
+
+    def _apply_rate_limit_cooldown(self) -> None:
+        logger.warning(
+            "AEMET returned 429; applying a %.1fs cooldown before further requests",
+            _RATE_LIMIT_COOLDOWN_SECONDS,
+        )
+        self._next_allowed_time = time.monotonic() + _RATE_LIMIT_COOLDOWN_SECONDS
 
     def _raise_for_unexpected_status(self, response: httpx.Response) -> None:
         if response.status_code in (401, 403):
@@ -133,11 +176,26 @@ class AemetClient:
                 f"AEMET returned unexpected status {response.status_code}"
             )
 
-    def _parse_envelope(self, response: httpx.Response) -> AemetEnvelope:
+    def _parse_envelope(self, response: httpx.Response) -> AemetEnvelope | None:
         try:
             body = response.json()
         except ValueError as exc:
             raise AemetResponseError("AEMET envelope response was not valid JSON") from exc
+
+        # AEMET signals "no data for this range" two different ways,
+        # confirmed live: a genuine HTTP 404 (handled by the caller before
+        # this method runs), and an HTTP 200 whose body carries
+        # estado: 404 with no datos/metadatos fields at all. The same
+        # estado: 404 wrapper is also used for a range exceeding AEMET's
+        # undocumented ~31-day limit ("El rango de fechas no puede ser
+        # superior a 1 mes") — a rejected request, not an empty result —
+        # distinguished only by the descripcion text, since AEMET gives
+        # no separate status code for it.
+        if isinstance(body, dict) and body.get("estado") == 404:
+            descripcion = body.get("descripcion", "")
+            if isinstance(descripcion, str) and "rango de fechas" in descripcion.lower():
+                raise AemetRangeTooLongError(descripcion)
+            return None
 
         try:
             return AemetEnvelope.model_validate(body)
