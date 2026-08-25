@@ -30,5 +30,9 @@ export interface ObservationResponse {
   temperatureCelsius: number | null
   pressureHpa: number | null
   windSpeedMs: number | null
+  /** Maximum, not a separately selectable measurement: turbine operation
+   * has minimum/maximum/optimal wind-speed thresholds, so the mean alone
+   * can conceal a gust relevant to a wind-farm feasibility assessment. */
+  windSpeedMaxMs: number | null
   observationCount: number
 }

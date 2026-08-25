@@ -50,6 +50,7 @@ function parseObservation(raw: unknown): ObservationResponse {
     temperatureCelsius: asNullableNumber(record.temperature_celsius),
     pressureHpa: asNullableNumber(record.pressure_hpa),
     windSpeedMs: asNullableNumber(record.wind_speed_ms),
+    windSpeedMaxMs: asNullableNumber(record.wind_speed_max_ms),
     observationCount: record.observation_count,
   }
 }
