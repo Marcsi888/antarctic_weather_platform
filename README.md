@@ -82,9 +82,10 @@ used solely by the test client. The AEMET integration itself uses `httpx`,
 per the project's chosen HTTP client — see Assumptions below.
 
 **Frontend:** React 19, TypeScript (strict mode, `noUncheckedIndexedAccess`),
-Vite, Vitest, ESLint with `typescript-eslint`'s `strictTypeChecked` preset.
-ESLint was chosen over Vite's newer default scaffold linter (`oxlint`) for
-reviewer familiarity; both are legitimate current choices.
+Vite, Recharts, Vitest, React Testing Library, ESLint with
+`typescript-eslint`'s `strictTypeChecked` preset. ESLint was chosen over
+Vite's newer default scaffold linter (`oxlint`) for reviewer familiarity;
+both are legitimate current choices.
 
 ## Repository Structure
 
@@ -121,12 +122,26 @@ antarctic_weather_platform/
 │   │   ├── unit/
 │   │   └── integration/                # full app, mocked AEMET HTTP only
 │   └── pyproject.toml
+├── frontend/
+│   ├── src/
+│   │   ├── App.tsx                     # state owner, request lifecycle
+│   │   ├── types/
+│   │   │   ├── api.ts                  # mirrors the backend wire contract
+│   │   │   └── requestState.ts         # discriminated union for UI state
+│   │   ├── api/
+│   │   │   ├── client.ts               # typed fetch wrapper, response parsing
+│   │   │   └── client.test.ts
+│   │   └── components/
+│   │       ├── QueryForm.tsx
+│   │       ├── ObservationsTable.tsx
+│   │       ├── ObservationsChart.tsx
+│   │       └── *.test.tsx
+│   └── package.json
 ├── docs/
-│   └── development-plan.md
+│   ├── development-plan.md
+│   └── report/                         # LaTeX technical report
 └── README.md
 ```
-
-This will grow as persistence evolves and the frontend layer is added.
 
 ## Setup
 
@@ -262,13 +277,22 @@ x̄ = (1/n) · Σ xᵢ,  i = 1..n
 The mean is a reasonable summary of a continuous physical quantity
 (temperature, pressure, wind speed) sampled at roughly regular ~10-minute
 intervals — it is the standard estimator of a signal's typical value over
-an interval. It is explicitly **not** a complete summary: averaging wind
-speed discards gust information (a bucket with one strong gust and mostly
-calm air can share a mean with a bucket of steady moderate wind) and
-direction is not modeled at all. A bucket where every reading is missing
-or quality-flagged reports `null` for that measurement, not `0.0` — zero
-would be a real, incorrect physical value, whereas `null` correctly means
-"no valid data."
+an interval. It is explicitly **not** a complete summary on its own:
+averaging wind speed discards gust information (a bucket with one strong
+gust and mostly calm air can share a mean with a bucket of steady moderate
+wind). This matters concretely, not just statistically: turbine power
+generation has minimum, maximum, and optimal operating wind-speed
+thresholds, confirmed with the assigning team, so a mean alone can conceal
+a gust or lull that is operationally significant for a wind-farm
+feasibility study. Wind speed's aggregated result therefore reports both
+the mean and the maximum of the bucket's valid readings
+(`wind_speed_ms`, `wind_speed_max_ms`); temperature and pressure report
+the mean only, since the same operational-threshold reasoning does not
+apply to them here. Wind direction is still not modeled at all, since it
+falls outside the specification's three required measurements. A bucket
+where every reading is missing or quality-flagged reports `null` for that
+measurement, not `0.0` — zero would be a real, incorrect physical value,
+whereas `null` correctly means "no valid data."
 
 Grouping and reduction are both O(n) in the number of raw observations,
 which is the relevant complexity for a client-facing query over a
@@ -321,6 +345,11 @@ Sessions are scoped with a context manager (`session_scope`) that commits
 on success and rolls back on any exception, so a partially-applied write
 is never left in the database.
 
+**Cache staleness.** A fetched range is cached indefinitely; there is no
+TTL or revalidation policy. This was confirmed as correct, not merely
+assumed, by the assigning team: AEMET's historical Antarctic data is
+stable once published and does not change retroactively.
+
 Two SQLite-specific correctness issues surfaced during testing and are
 worth recording, since both would have been silent data bugs rather than
 crashes:
@@ -366,6 +395,20 @@ database if query volume ever justified it.
 - The `datos` URL returned in step one is a pre-signed link and does not
   take the `api_key` header — verified against the live API, not assumed.
 
+**Rate limiting.** AEMET does not publish a rate limit, and the assigning
+team explicitly flagged this as something to handle conservatively. The
+client therefore throttles proactively rather than relying only on
+reacting to a `429`: every outbound request passes through a single
+choke point that enforces a minimum 500ms spacing from the previous
+request, guarded by an `asyncio.Lock` so concurrent callers cannot both
+observe "enough time has passed" and fire together. A real `429` response
+extends that spacing to a 5 second cooldown, since a real `429` is direct
+evidence of the actual limit and is worth more than the conservative
+default guess. This lives inside `AemetClient` rather than as a
+general-purpose rate-limiter component, since there is exactly one
+external API and one caller of it; a reusable abstraction would be
+unjustified complexity here.
+
 ## Backend API
 
 ### `GET /observations`
@@ -382,6 +425,11 @@ database if query volume ever justified it.
 Response is a JSON array; each element's `datetime` is Europe/Madrid with
 an explicit UTC offset, and any measurement not requested is `null` rather
 than omitted, keeping the response shape uniform regardless of selection.
+When `speed` is requested, the response includes both `wind_speed_ms`
+(mean) and `wind_speed_max_ms` (maximum) for the bucket, since a mean
+alone can conceal a gust or lull relevant to turbine operation (see
+Aggregation Strategy below); `wind_speed_max_ms` is not itself a
+separately selectable measurement.
 
 Validation failures (unknown station, `start >= end`, malformed datetime,
 an offset-bearing datetime where none is accepted, an unrecognized
@@ -424,6 +472,57 @@ Rebuilding the HTTP client per request would mean paying a new TCP+TLS
 handshake to AEMET on every call instead of reusing a pooled connection,
 which is the concrete mechanism behind "connection reuse" as a resilience
 property, not just a phrase.
+
+## Frontend
+
+React 19 + TypeScript (Vite), in `frontend/`. A single query form
+(`QueryForm`) captures every backend parameter — station, start/end
+datetime, timezone, aggregation, measurement selection — and submits to
+`GET /observations` through a typed API client (`api/client.ts`). Results
+render as both a table (`ObservationsTable`) and a dual-axis line chart
+(`ObservationsChart`, using Recharts): pressure gets its own Y-axis, since
+its magnitude (~950-1050 hPa) shares no meaningful scale with temperature
+or wind speed, and lines do not connect across `null` values, since a gap
+in the data (a bucket with no valid readings, or a measurement not
+requested) is a real absence, not an interpolation opportunity.
+
+Application state is one discriminated union
+(`{status: 'idle' | 'loading' | 'success' | 'error', ...}`) rather than
+several independent booleans, so invalid combinations (loading and error
+simultaneously, for instance) are unrepresentable rather than merely
+avoided by convention. Every state the challenge specifies — initial,
+loading, success, empty, validation, and API error — is handled
+explicitly in `App.tsx`.
+
+The timezone field is pre-filled with the browser's own timezone
+(`Intl.DateTimeFormat().resolvedOptions().timeZone`) as an editable
+starting value. This is a client-side convenience only, not geolocation:
+no IP lookup or server-side location tracking occurs anywhere in this
+system, and the field remains fully editable, including to a fixed UTC
+offset per the backend's own supported input formats.
+
+## Testing
+
+**Backend** (`backend/tests/`, pytest): unit tests for each domain module
+in isolation (timezone/DST, aggregation, exception hierarchy) plus the
+AEMET client and cache repository with all external calls mocked, and
+integration tests exercising the full FastAPI app end-to-end (mocked AEMET
+HTTP only) across every validation and behavioral case in the
+specification. Run with `pytest` from `backend/`.
+
+**Frontend** (`frontend/src/**/*.test.tsx`, Vitest + React Testing
+Library): behavioral tests from the user's perspective — form validation
+(required fields, start-before-end), successful submission, loading
+state, API error state, empty state, table rendering (including the
+`null`-vs-real-zero distinction), and interactions changing the
+submitted query (aggregation level, station, measurement selection). The
+API layer is mocked at `getObservations`, not at `fetch`, since the API
+client itself already has its own dedicated test suite covering request
+construction, response parsing, and error handling. Run with `npm test`
+from `frontend/`.
+
+Both suites mock every external call (AEMET, the backend API) and never
+depend on network access or a running counterpart service to pass.
 
 ## Trade-offs
 
