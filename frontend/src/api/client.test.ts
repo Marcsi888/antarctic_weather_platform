@@ -66,6 +66,7 @@ describe('getObservations', () => {
           temperature_celsius: 1.4,
           pressure_hpa: 984.4,
           wind_speed_ms: 7.1,
+          wind_speed_max_ms: 12.3,
           observation_count: 1,
         },
       ]),
@@ -79,6 +80,7 @@ describe('getObservations', () => {
         temperatureCelsius: 1.4,
         pressureHpa: 984.4,
         windSpeedMs: 7.1,
+        windSpeedMaxMs: 12.3,
         observationCount: 1,
       },
     ])
@@ -92,6 +94,7 @@ describe('getObservations', () => {
           temperature_celsius: 1.4,
           pressure_hpa: null,
           wind_speed_ms: null,
+          wind_speed_max_ms: null,
           observation_count: 1,
         },
       ]),
@@ -101,6 +104,7 @@ describe('getObservations', () => {
 
     expect(result?.pressureHpa).toBeNull()
     expect(result?.windSpeedMs).toBeNull()
+    expect(result?.windSpeedMaxMs).toBeNull()
   })
 
   it('throws ApiError with the server detail message on a 400 response', async () => {
