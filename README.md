@@ -24,9 +24,11 @@ GET /api/antartida/datos/fechaini/{fechaIniStr}/fechafin/{fechaFinStr}/estacion/
 ```
 
 This endpoint returns raw ~10-minute-interval observations recorded at
-Spain's two Antarctic bases. AEMET updates this dataset annually, not in
-real time — recent date ranges (the last several months) may legitimately
-return no data.
+Spain's two Antarctic bases. AEMET does not publish this dataset in real
+time; observed live, the lag between the most recent available data and
+the present has been on the order of several months (not a fixed or
+documented figure) — so a query with an end date close to today may
+legitimately return no data yet.
 
 ### Supported stations
 
@@ -323,11 +325,11 @@ station X between times A and B."
 
 **`fetched_ranges`** — records that AEMET was queried for a given
 `(station, range)`, independent of whether that query returned any
-observations. This is necessary because AEMET's Antarctic dataset updates
-annually: a recent date range legitimately has zero observations, and
-without a separate record of "we asked and got nothing," that would be
-indistinguishable from "we never asked," causing the cache to re-query
-AEMET on every request for that range.
+observations. This is necessary because AEMET publishes this dataset with
+a real lag behind the present: a recent date range legitimately has zero
+observations, and without a separate record of "we asked and got
+nothing," that would be indistinguishable from "we never asked," causing
+the cache to re-query AEMET on every request for that range.
 
 **Cache hit logic**, following interval reasoning: for a requested range
 *R* on a given station, the cache is checked against previously fetched
@@ -340,6 +342,13 @@ refetched. This is a deliberate scope decision: single-range containment
 covers the actual usage pattern (a user submitting and refining one query)
 without the complexity of interval-tree merging, which correctness and
 explainability don't require here.
+
+This check runs per ≤31-day chunk, not once against the whole requested
+range (see AEMET Integration Notes below for why chunking exists at all).
+In practice this makes the cache finer-grained than a naive reading of
+"single-range containment" suggests: a year-long request that was
+previously fetched a month at a time is checked, and can hit, one
+month-sized chunk at a time, not as one large range.
 
 Sessions are scoped with a context manager (`session_scope`) that commits
 on success and rolls back on any exception, so a partially-applied write
@@ -378,22 +387,46 @@ database if query volume ever justified it.
 
 ## AEMET Integration Notes
 
-- The client performs at most one retry, only for connection/timeout
-  failures and 5xx responses, with a short fixed delay (not exponential
-  backoff — this is a single-user local application, not a system under
-  concurrent load). 429 (rate limit) and other 4xx responses are never
-  retried automatically: retrying a rate-limited request immediately
-  would make the problem worse, and retrying a client error would fail
-  identically.
+- The client performs at most one retry for connection/timeout failures
+  and 5xx responses, with a short fixed delay (not exponential backoff —
+  this is a single-user local application, not a system under concurrent
+  load). Other 4xx responses are never retried: retrying a client error
+  would fail identically.
+- A 429 (rate limit) is retried exactly once, after a longer cooldown
+  than the baseline request spacing, rather than failing the request
+  outright. This matters specifically because `WeatherService` splits any
+  range over ~31 days into several sequential AEMET calls (see below): a
+  single 429 partway through a multi-chunk fetch previously aborted the
+  whole request and discarded every chunk already fetched, surfacing a
+  perfectly satisfiable query as a hard failure. A persistent 429 (i.e.
+  still rate-limited after the retry) still raises `AemetUnavailableError`
+  rather than retrying indefinitely.
 - 401/403 (bad or missing API key) raises `AemetAuthenticationError`, kept
   distinct from `AemetUnavailableError`, since a rejected key is a
   configuration problem, not a transient outage — conflating the two would
   make "should I retry?" logic upstream give the wrong answer.
 - AEMET's 404 for an empty date range is treated as a successful empty
-  result (`[]`), not an exception, consistent with the annual update
-  cadence noted above.
+  result (`[]`), not an exception, consistent with the publication lag
+  noted above.
 - The `datos` URL returned in step one is a pre-signed link and does not
   take the `api_key` header — verified against the live API, not assumed.
+- AEMET signals "no data for this range" in two different ways, both
+  discovered by live testing rather than documentation: a genuine HTTP
+  404, and an HTTP 200 whose body carries `estado: 404` with no
+  `datos`/`metadatos` fields. The client checks for the embedded code
+  before attempting to validate the envelope's full shape, so this is
+  never mistaken for a malformed response.
+- **AEMET rejects any single request spanning more than ~31 days**
+  (`"El rango de fechas no puede ser superior a 1 mes"`), an undocumented
+  limit found only by querying a full year and getting far fewer
+  observations back than expected, silently, using the same
+  `estado: 404` wrapper as a genuine empty result. The two cases are now
+  distinguished by the response text (`AemetRangeTooLongError` vs. a
+  legitimate empty list), and `WeatherService` proactively splits any
+  requested range into ≤31-day chunks before ever calling AEMET, checking
+  the cache per chunk rather than for the whole range — so a later
+  request overlapping only part of a previously-fetched year still
+  benefits from a partial cache hit instead of forcing a full re-fetch.
 
 **Rate limiting.** AEMET does not publish a rate limit, and the assigning
 team explicitly flagged this as something to handle conservatively. The
