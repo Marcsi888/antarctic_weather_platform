@@ -41,6 +41,7 @@ def client() -> AemetClient:
         base_url=BASE_URL,
         retry_delay_seconds=0,
         min_request_interval_seconds=0,
+        rate_limit_cooldown_seconds=0,
     )
 
 
@@ -149,9 +150,31 @@ async def test_get_observations_401_raises_authentication_error(
         await client.get_observations(Station.GABRIEL_DE_CASTILLA, START, END)
 
 
-async def test_get_observations_429_raises_unavailable_error(
+async def test_get_observations_429_retries_once_then_succeeds(
     client: AemetClient, httpx_mock: HTTPXMock
 ) -> None:
+    # A multi-chunk request (WeatherService splits ranges over 31 days
+    # into several calls) can cross AEMET's undocumented limit partway
+    # through; failing the whole query on the first 429 would discard
+    # every chunk already fetched. One retry after the cooldown gives it
+    # a real chance to succeed.
+    httpx_mock.add_response(url=_envelope_url(Station.GABRIEL_DE_CASTILLA), status_code=429)
+    httpx_mock.add_response(
+        url=_envelope_url(Station.GABRIEL_DE_CASTILLA),
+        json={"descripcion": "exito", "estado": 200, "datos": DATOS_URL, "metadatos": "x"},
+    )
+    httpx_mock.add_response(url=DATOS_URL, json=[])
+
+    observations = await client.get_observations(Station.GABRIEL_DE_CASTILLA, START, END)
+
+    assert observations == []
+    assert len(httpx_mock.get_requests()) == 3
+
+
+async def test_get_observations_persistent_429_raises_after_retry(
+    client: AemetClient, httpx_mock: HTTPXMock
+) -> None:
+    httpx_mock.add_response(url=_envelope_url(Station.GABRIEL_DE_CASTILLA), status_code=429)
     httpx_mock.add_response(url=_envelope_url(Station.GABRIEL_DE_CASTILLA), status_code=429)
 
     with pytest.raises(AemetUnavailableError):
@@ -163,7 +186,9 @@ async def test_429_extends_the_throttle_beyond_the_baseline_interval(
 ) -> None:
     # A real 429 is direct evidence of the actual limit; the client should
     # become more conservative afterward, not just report the error and
-    # continue at the same baseline pace.
+    # continue at the same baseline pace. Cooldown is deliberately
+    # nonzero here (unlike the shared fixture) since this test asserts
+    # its effect on _next_allowed_time.
     http_client = httpx.AsyncClient(timeout=10.0)
     throttled_client = AemetClient(
         http_client=http_client,
@@ -171,13 +196,21 @@ async def test_429_extends_the_throttle_beyond_the_baseline_interval(
         base_url=BASE_URL,
         retry_delay_seconds=0,
         min_request_interval_seconds=0.05,
+        rate_limit_cooldown_seconds=0.2,
     )
     httpx_mock.add_response(url=_envelope_url(Station.GABRIEL_DE_CASTILLA), status_code=429)
+    httpx_mock.add_response(url=_envelope_url(Station.GABRIEL_DE_CASTILLA), status_code=429)
 
+    before_second_429 = time.monotonic()
     with pytest.raises(AemetUnavailableError):
         await throttled_client.get_observations(Station.GABRIEL_DE_CASTILLA, START, END)
 
-    wait_seconds = throttled_client._next_allowed_time - time.monotonic()
+    # Measured from just before the second 429 (which re-applies the
+    # cooldown), not from an arbitrary later point: the retry's own
+    # cooldown sleep elapses real time, so comparing against "now" after
+    # the whole call returns would just measure how much of the cooldown
+    # had already passed, not whether it was applied.
+    wait_seconds = throttled_client._next_allowed_time - before_second_429
     assert wait_seconds > 0.05  # cooldown, not just the baseline interval
 
 

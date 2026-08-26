@@ -56,12 +56,14 @@ class AemetClient:
         base_url: str,
         retry_delay_seconds: float = _RETRY_DELAY_SECONDS,
         min_request_interval_seconds: float = _MIN_REQUEST_INTERVAL_SECONDS,
+        rate_limit_cooldown_seconds: float = _RATE_LIMIT_COOLDOWN_SECONDS,
     ) -> None:
         self._http_client = http_client
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._retry_delay_seconds = retry_delay_seconds
         self._min_request_interval_seconds = min_request_interval_seconds
+        self._rate_limit_cooldown_seconds = rate_limit_cooldown_seconds
         # Guards _next_allowed_time so concurrent callers cannot both
         # observe "enough time has passed" and fire simultaneously; an
         # unsynchronized check-then-sleep would let exactly that race
@@ -133,7 +135,16 @@ class AemetClient:
             return response
 
         if response.status_code == 429:
+            # A multi-chunk request (see WeatherService's 31-day
+            # splitting) can easily cross AEMET's undocumented limit
+            # partway through; aborting the whole query on the first 429
+            # would throw away every chunk already fetched. One retry
+            # after the cooldown gives the request a real chance to
+            # succeed instead of failing outright on transient pressure.
             self._apply_rate_limit_cooldown()
+            logger.warning("AEMET returned 429, retrying once after cooldown: %s", url)
+            await asyncio.sleep(self._rate_limit_cooldown_seconds)
+            response = await self._throttled_get(url, headers=headers)
         elif response.status_code in _RETRYABLE_STATUS_CODES:
             logger.warning(
                 "AEMET returned %s, retrying once: %s", response.status_code, url
@@ -156,9 +167,9 @@ class AemetClient:
     def _apply_rate_limit_cooldown(self) -> None:
         logger.warning(
             "AEMET returned 429; applying a %.1fs cooldown before further requests",
-            _RATE_LIMIT_COOLDOWN_SECONDS,
+            self._rate_limit_cooldown_seconds,
         )
-        self._next_allowed_time = time.monotonic() + _RATE_LIMIT_COOLDOWN_SECONDS
+        self._next_allowed_time = time.monotonic() + self._rate_limit_cooldown_seconds
 
     def _raise_for_unexpected_status(self, response: httpx.Response) -> None:
         if response.status_code in (401, 403):
