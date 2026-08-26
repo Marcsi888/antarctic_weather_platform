@@ -1,0 +1,358 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{parskip}
+\usepackage{enumitem}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!50!black,
+    urlcolor=blue!50!black,
+    citecolor=blue!50!black,
+    pdftitle={Antarctic Weather Platform: Technical Report},
+    pdfauthor={M\'aria Nyolcas}
+}
+
+\definecolor{codebg}{rgb}{0.96,0.96,0.96}
+\definecolor{codekeyword}{rgb}{0.0,0.0,0.6}
+\definecolor{codestring}{rgb}{0.6,0.0,0.0}
+\definecolor{codecomment}{rgb}{0.3,0.5,0.3}
+
+\lstdefinestyle{pythonstyle}{
+    language=Python,
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\footnotesize,
+    keywordstyle=\color{codekeyword}\bfseries,
+    stringstyle=\color{codestring},
+    commentstyle=\color{codecomment}\itshape,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    numbersep=8pt,
+    frame=single,
+    rulecolor=\color{gray!40},
+    breaklines=true,
+    showstringspaces=false,
+    tabsize=4,
+    captionpos=b,
+}
+\lstset{style=pythonstyle}
+
+\title{\textbf{Antarctic Weather Platform}\\
+\large Technical Report}
+\author{M\'aria Nyolcas}
+\date{}
+
+\begin{document}
+
+% --- Cover page ---
+\begin{titlepage}
+\centering
+\vspace*{3cm}
+
+{\Huge\bfseries Antarctic Weather Platform\par}
+\vspace{0.5cm}
+{\Large Technical Report\par}
+
+\vspace{2cm}
+
+{\large A backend and frontend system for retrieving, caching, aggregating,\\
+and visualizing historical Antarctic meteorological observations\\
+from AEMET OpenData\par}
+
+\vfill
+
+{\large\bfseries M\'aria Nyolcas\par}
+\vspace{0.3cm}
+{\large Prepared for GS Inima Environment\par}
+
+\vspace{1.5cm}
+
+{\large Development period: 21--28 August 2026\par}
+
+\vspace{2cm}
+
+\end{titlepage}
+
+% --- Abstract, on its own page ---
+\newpage
+\begin{abstract}
+\noindent This report documents the engineering reasoning behind a backend
+and frontend system for retrieving, caching, aggregating, and visualizing
+historical Antarctic meteorological observations from AEMET OpenData, built
+for GS Inima Environment's evaluation of a hypothetical wind-farm project in
+Antarctica. It complements the repository's \texttt{README.md}, which covers
+setup, usage, and a summary of design decisions, by explaining \emph{why}
+each non-trivial decision was made, including the alternatives considered
+and their trade-offs. Source excerpts are referenced by file path and line
+range against the repository at the time of writing, so every claim here can
+be checked directly against running code, not reconstructed from memory.
+
+\medskip
+\noindent\textbf{A note on scope and timing}
+\\[0.3em]
+\noindent This report is being written incrementally, alongside
+development, rather than after the fact: a deliberate choice made explicit
+here because it carries a real trade-off. Sections describing finished,
+tested subsystems (the AEMET integration, timezone and DST handling,
+aggregation, and SQLite caching) are written against stable code. Sections
+depending on work not yet complete at the time of a given revision (frontend
+architecture, CI, final trade-offs) are marked with a visible \texttt{TODO}
+rather than filled with speculative or placeholder content, and are
+completed once the corresponding code exists. This is stated plainly so the
+report is never mistaken for describing functionality that has not been
+verified.
+\end{abstract}
+
+\newpage
+\tableofcontents
+\newpage
+
+\section{Executive Summary}
+
+The system exposes a single primary endpoint, \texttt{GET /observations},
+that retrieves historical weather observations for one of two Spanish
+Antarctic research stations (Gabriel de Castilla, Juan Carlos I) over a
+caller-specified date range, optionally aggregated to hourly, daily, or
+monthly resolution, and returns temperature, pressure, and wind speed in a
+consistent, timezone-normalized shape.
+
+Three engineering concerns dominated the design, in the order the challenge
+itself weights them:
+
+\begin{enumerate}[nosep]
+    \item \textbf{Correctness under real-world data conditions.} AEMET's
+    actual API behavior, including a two-step response indirection, a
+    \texttt{"NaN"} string sentinel for missing measurements, an
+    undocumented data-quality flag, and station-dependent optional fields,
+    was verified against the live API before any client code was written,
+    rather than assumed from the endpoint's description alone
+    (Section~\ref{sec:aemet-integration}).
+    \item \textbf{Temporal correctness.} The system distinguishes an
+    instant, a local wall-clock representation, a named timezone's DST
+    rules, and a fixed UTC offset as four genuinely different concepts,
+    and handles the two DST edge cases (nonexistent and ambiguous local
+    times) explicitly rather than relying on Python's implicit defaults
+    (Section~\ref{sec:timezone-dst}).
+    \item \textbf{A caching strategy whose behavior is fully explainable.}
+    Rather than a general interval-coverage algorithm, the cache uses a
+    deliberately scoped single-range containment check, reasoned through
+    as a trade-off between completeness and explainability
+    (Section~\ref{sec:caching}).
+\end{enumerate}
+
+\section{Requirements Analysis}
+\label{sec:requirements}
+
+\subsection{Source of truth}
+
+The authoritative requirements are the official challenge specification
+(PDF, three parts) together with direct clarification from the hiring
+contact. Where the two could be read differently, the original PDF is
+treated as authoritative, since it is the actual assessment document rather
+than a paraphrase of it.
+
+\subsection{Core functional requirements, as specified}
+
+\begin{itemize}[nosep]
+    \item A Python web API (FastAPI or Flask) exposing the AEMET Antarctic
+    endpoint's data.
+    \item Caller-specified start and end datetime
+    (\texttt{AAAA-MM-DDTHH:MM:SS}).
+    \item An optional location/timezone parameter, expressible either as
+    an IANA timezone name (e.g. \texttt{Europe/Berlin}) or as a fixed UTC
+    offset (e.g. \texttt{+02:00}).
+    \item A choice of exactly two supported stations: ``Gabriel de
+    Castilla'' and ``Juan Carlos I''.
+    \item A time-aggregation selector: None, Hourly, Daily, or Monthly,
+    with daily/monthly aggregation required to respect the meteo
+    station's timezone rather than grouping raw UTC timestamps.
+    \item Zero to three requested measurement types (temperature,
+    pressure, wind speed); zero selected means all three are returned.
+    \item Output datetimes in \texttt{Europe/Madrid} (CET/CEST), always
+    carrying an explicit UTC offset.
+    \item Explicit confirmation of DST behavior.
+    \item SQLite persistence to avoid redundant upstream requests, with
+    attention to database best practice, motivated explicitly by an
+    anticipated high-volume, latency-sensitive consumer (intraday
+    traders).
+    \item Structured logging for troubleshooting.
+    \item Automated tests, not required to be exhaustive.
+    \item A frontend allowing the data to be queried and viewed in a
+    table, optionally a chart, with explicit permission to use any
+    reasonable technology stack.
+
+\end{itemize}
+
+\subsection{Ambiguities identified before implementation}
+
+The specification is precise about behavior but silent on several
+implementation-level questions that materially affect correctness. Each was
+resolved deliberately, documented as an assumption, and isolated behind a
+narrow interface so it can be revisited without a wider rewrite.
+
+\begin{description}
+    \item[Aggregation statistic.] The specification requires aggregation
+    but does not name a statistic. Arithmetic mean was chosen for all
+    three measurements (Section~\ref{sec:aggregation}); a second question
+    --- whether wind speed specifically should also report a maximum,
+    given the wind-farm context --- was raised with the assigning team
+    rather than decided unilaterally, since it changes the response
+    contract.
+    \item[Default input timezone.] The specification marks the timezone
+    parameter optional without stating a default. \texttt{Europe/Madrid}
+    was chosen over UTC specifically because it keeps an unspecified date
+    range aligned with the same calendar day in the (unconditionally
+    Madrid) output, rather than spilling across a day boundary --- a
+    concrete failure mode that was worked through with a numeric example
+    before the decision was made.
+    \item[Data-quality flag.] AEMET's live response includes a
+    \texttt{qdato} field (data quality, 0 = good, 1 = bad) that is not
+    part of the specification's field table. Its existence was discovered
+    only by making a live API call, not by reading documentation. Whether
+    a flagged-bad reading should be silently excluded from aggregation
+    or exposed unfiltered was likewise raised with the assigning team.
+    \item[Cache staleness.] The specification states AEMET's Antarctic
+    dataset updates only a few times a year, but does not say whether a
+    previously cached range should ever be considered stale and
+    re-fetched. The current implementation caches a fetched range
+    indefinitely; whether a revalidation window is expected was raised
+    with the assigning team rather than assumed.
+\end{description}
+
+\subsection{Assumptions requiring verification}
+
+Two further points were resolved by direct experimentation against the live
+AEMET API rather than left as assumptions, and are recorded here because
+they materially shaped the client and domain model:
+
+\begin{itemize}[nosep]
+    \item Whether the AEMET Antarctic endpoint returns data directly or
+    via an indirection (a documented risk called out by the assigning
+    team) --- confirmed to be a two-step indirection
+    (Section~\ref{sec:aemet-integration}).
+    \item The exact station identifiers for the two required stations,
+    and whether the field schema is uniform across them --- confirmed via
+    AEMET's own OpenAPI specification and a live request per station; the
+    two stations were found \emph{not} to return an identical field set
+    (Section~\ref{sec:aemet-integration}).
+\end{itemize}
+
+\section{Architecture}
+\label{sec:architecture}
+
+\subsection{Layering, and the requirement it serves}
+
+The backend is organized into five layers, each with one responsibility:
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Layer} & \textbf{Responsibility} \\
+\midrule
+API / Routes & Request validation, HTTP concerns, response shaping \\
+Application / Service & Orchestration: cache check $\rightarrow$ AEMET fetch $\rightarrow$ aggregate \\
+Domain & Pure functions: timezone conversion, aggregation, quality filtering \\
+Repositories / Integrations & AEMET client, SQLite repository \\
+External systems & SQLite, AEMET OpenData \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+This is not layering for its own sake. The concrete requirement it serves is
+testability under the specific correctness risks this system has: the
+domain layer (\texttt{app/domain/time.py}, \texttt{app/domain/aggregation.py})
+has \emph{no} dependency on FastAPI, SQLAlchemy, or httpx, so the timezone
+and DST logic --- the single riskiest part of this system, per
+Section~\ref{sec:timezone-dst} --- can be unit tested by constructing plain
+Python \texttt{datetime} values and asserting on plain return values,
+without a database, an HTTP mock, or a running application. The same is
+true of the aggregation module. A change to how AEMET responses are parsed,
+or how the API formats a response, cannot silently change how a DST
+transition is handled, because the code paths do not intersect.
+
+\subsection{Orchestration and dependency injection}
+
+The application/service layer is a single class,
+\texttt{WeatherService} (\texttt{backend/app/services/weather\_service.py}),
+whose entire responsibility is sequencing: check whether the requested
+range is cached, call AEMET only on a miss, persist the result, then
+aggregate and return. It depends on its collaborators through its
+constructor rather than constructing them itself:
+
+\begin{lstlisting}[caption={\texttt{WeatherService} depends on an AEMET source through a \texttt{Protocol}, not the concrete client class. \texttt{backend/app/services/weather\_service.py}, lines 12--29.}]
+class AemetObservationSource(Protocol):
+    """The subset of AemetClient this service needs, lets tests substitute a fake with no real HTTP client behind it."""
+
+    async def get_observations(
+        self, station: Station, start: datetime, end: datetime
+    ) -> list[StationObservation]: ...
+
+
+class WeatherService:
+    """Orchestrates cache lookup, AEMET retrieval, and aggregation."""
+
+    # Exceptions from either collaborator propagate unchanged; mapping
+    # them to HTTP responses is the API layer's job, not this one's.
+    def __init__(
+        self, aemet_client: AemetObservationSource, repository: ObservationRepository
+    ) -> None:
+        self._aemet_client = aemet_client
+        self._repository = repository
+\end{lstlisting}
+
+This is a direct application of dependency inversion, chosen deliberately
+over the alternative of having \texttt{WeatherService} import and
+instantiate \texttt{AemetClient} directly. The concrete alternative that
+was rejected --- constructing the real client inside the service and
+mocking \texttt{httpx} at the transport level in every service test ---
+would work, but it means every service-layer test also exercises (and can
+be broken by) HTTP mocking concerns that have nothing to do with the
+orchestration logic actually being tested. Depending on a \texttt{Protocol}
+means the test suite's fake client
+(\texttt{FakeAemetClient}, \texttt{tests/unit/test\_weather\_service.py},
+lines 16--27) is a small class with no knowledge of HTTP at all, and ---
+because \texttt{Protocol} is structurally typed --- \texttt{mypy} verifies
+that both the fake and the real \texttt{AemetClient} satisfy the same
+interface, so this is a property enforced by the type checker, not merely
+true by convention.
+
+\subsection{Three model shapes, not one}
+
+A single AEMET observation is represented by three distinct types as it
+moves through the system, and this distinction is deliberate rather than
+incidental:
+
+\begin{enumerate}[nosep]
+    \item \textbf{Transport DTO} (\texttt{AemetObservationDTO},
+    \texttt{app/integrations/aemet/schemas.py}) --- mirrors AEMET's actual
+    wire format, including its quirks (Section~\ref{sec:aemet-integration}).
+    \item \textbf{Domain model} (\texttt{StationObservation}, same file) ---
+    a frozen, verified, in-domain reading with no knowledge of AEMET's
+    field names or serialization conventions.
+    \item \textbf{API response model} (\texttt{ObservationResponse},
+    \texttt{app/api/schemas.py}) --- the wire contract this application
+    exposes, independent of both AEMET's format and the internal domain
+    representation.
+\end{enumerate}
+
+Collapsing these into one type would couple three independently-changing
+concerns: AEMET could alter its response format, the internal
+representation could be refactored for a new aggregation strategy, and the
+public API contract could evolve for frontend needs --- none of which
+should require touching the other two.
+
+% TODO: AEMET Integration, Persistence and Caching, Timezone and DST
+% Strategy, Aggregation Strategy, and Testing Strategy sections are
+% written next, against the corresponding finished code. Frontend
+% Architecture, CI and Engineering Quality, Security Considerations,
+% Scalability, Trade-offs and Limitations, Future Improvements, and
+% Conclusion are added once that work exists.
+
+\end{document}
