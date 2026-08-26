@@ -12,15 +12,15 @@ export function ObservationsTable({ data }: ObservationsTableProps) {
   if (data.length === 0) {
     return (
       <p className="results-empty">
-        No observations for this query. AEMET's Antarctic dataset is updated annually, so recent
-        or future date ranges typically have no data yet — try a range from a previous year.
+        No observations for this query. AEMET's Antarctic dataset lags the present by several
+        months, so very recent or future date ranges typically have no data yet — try an earlier
+        end date.
       </p>
     )
   }
 
   return (
     <table>
-      <caption>Weather observations</caption>
       <thead>
         <tr>
           <th scope="col">Datetime</th>

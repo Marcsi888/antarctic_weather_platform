@@ -91,6 +91,46 @@ describe('App', () => {
     expect(getObservationsMock).toHaveBeenCalledOnce()
   })
 
+  it('renders summary metrics only on a successful query, not on idle/loading/error', async () => {
+    getObservationsMock.mockResolvedValue([sampleObservation])
+    render(<App />)
+
+    expect(screen.queryByRole('region', { name: 'Summary metrics' })).not.toBeInTheDocument()
+
+    const user = await fillValidDateRange()
+    await user.click(screen.getByRole('button', { name: /query/i }))
+
+    expect(await screen.findByRole('region', { name: 'Summary metrics' })).toHaveTextContent(
+      'Mean wind speed',
+    )
+  })
+
+  it('renders the wind energy analysis section only on a successful query', async () => {
+    getObservationsMock.mockResolvedValue([sampleObservation])
+    render(<App />)
+
+    expect(screen.queryByText('Wind energy analysis')).not.toBeInTheDocument()
+
+    const user = await fillValidDateRange()
+    await user.click(screen.getByRole('button', { name: /query/i }))
+
+    expect(await screen.findByText('Wind energy analysis')).toBeInTheDocument()
+  })
+
+  it('renders the query summary with the as-submitted station and aggregation after success', async () => {
+    getObservationsMock.mockResolvedValue([sampleObservation])
+    render(<App />)
+    const user = await fillValidDateRange()
+
+    await user.selectOptions(screen.getByLabelText('Station'), 'juan_carlos_i')
+    await user.selectOptions(screen.getByLabelText('Aggregation'), 'daily')
+    await user.click(screen.getByRole('button', { name: /query/i }))
+
+    const summarySection = await screen.findByRole('region', { name: 'Query summary' })
+    expect(summarySection).toHaveTextContent('Juan Carlos I')
+    expect(summarySection).toHaveTextContent('Daily')
+  })
+
   it('shows an empty-state message when the query returns no observations', async () => {
     getObservationsMock.mockResolvedValue([])
     render(<App />)

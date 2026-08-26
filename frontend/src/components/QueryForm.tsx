@@ -1,5 +1,6 @@
 import { useId, useState } from 'react'
 import type { SubmitEvent } from 'react'
+import { AGGREGATION_LEVELS, STATIONS } from '../constants/labels'
 import type { AggregationLevel, Measurement, ObservationQuery, Station } from '../types/api'
 
 interface QueryFormProps {
@@ -10,18 +11,6 @@ interface QueryFormProps {
   onSubmit: (query: ObservationQuery) => void | Promise<void>
   disabled: boolean
 }
-
-const STATIONS: readonly { value: Station; label: string }[] = [
-  { value: 'gabriel_de_castilla', label: 'Gabriel de Castilla' },
-  { value: 'juan_carlos_i', label: 'Juan Carlos I' },
-]
-
-const AGGREGATION_LEVELS: readonly { value: AggregationLevel; label: string }[] = [
-  { value: 'none', label: 'None' },
-  { value: 'hourly', label: 'Hourly' },
-  { value: 'daily', label: 'Daily' },
-  { value: 'monthly', label: 'Monthly' },
-]
 
 const MEASUREMENTS: readonly { value: Measurement; label: string }[] = [
   { value: 'temperature', label: 'Temperature' },
@@ -40,6 +29,16 @@ function detectBrowserTimezone(): string {
   } catch {
     return 'Europe/Madrid'
   }
+}
+
+// A datetime-local input's .value omits seconds whenever they're :00,
+// even with step={1} set (a real browser behavior, not just a jsdom
+// quirk) — e.g. "2024-01-15T00:00" instead of "2024-01-15T00:00:00".
+// The backend requires the full HH:MM:SS format and rejects the
+// shortened string outright, so it must be padded before it's ever
+// stored in state or sent.
+function withSeconds(value: string): string {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value) ? `${value}:00` : value
 }
 
 function validate(start: string, end: string): string | null {
@@ -62,9 +61,25 @@ export function QueryForm({ onSubmit, disabled }: QueryFormProps) {
   const [measurements, setMeasurements] = useState<readonly Measurement[]>([])
   const [validationError, setValidationError] = useState<string | null>(null)
 
+  // An empty selection means "all" to the backend (see ObservationQuery),
+  // so "All" is a UI-only concept: checked exactly when the selection is
+  // empty. Picking an individual measurement while "All" is active
+  // replaces the selection with just that one, rather than adding to an
+  // implicit "everything" set; picking further ones then adds normally.
+  // Unchecking the last individual measurement falls back to "All"
+  // instead of leaving nothing selected, since an empty selection already
+  // means the same thing.
+  function selectAll() {
+    setMeasurements([])
+  }
+
   function toggleMeasurement(value: Measurement) {
     setMeasurements((current) =>
-      current.includes(value) ? current.filter((m) => m !== value) : [...current, value],
+      current.length === 0
+        ? [value]
+        : current.includes(value)
+          ? current.filter((m) => m !== value)
+          : [...current, value],
     )
   }
 
@@ -115,7 +130,7 @@ export function QueryForm({ onSubmit, disabled }: QueryFormProps) {
           step={1}
           value={start}
           onChange={(e) => {
-            setStart(e.target.value)
+            setStart(withSeconds(e.target.value))
           }}
           disabled={disabled}
           required
@@ -130,7 +145,7 @@ export function QueryForm({ onSubmit, disabled }: QueryFormProps) {
           step={1}
           value={end}
           onChange={(e) => {
-            setEnd(e.target.value)
+            setEnd(withSeconds(e.target.value))
           }}
           disabled={disabled}
           required
@@ -172,19 +187,25 @@ export function QueryForm({ onSubmit, disabled }: QueryFormProps) {
       </div>
 
       <fieldset disabled={disabled}>
-        <legend>Measurements (none selected returns all)</legend>
-        {MEASUREMENTS.map((m) => (
-          <label key={m.value}>
-            <input
-              type="checkbox"
-              checked={measurements.includes(m.value)}
-              onChange={() => {
-                toggleMeasurement(m.value)
-              }}
-            />
-            {m.label}
+        <legend>Measurements</legend>
+        <div>
+          <label>
+            <input type="checkbox" checked={measurements.length === 0} onChange={selectAll} />
+            All
           </label>
-        ))}
+          {MEASUREMENTS.map((m) => (
+            <label key={m.value}>
+              <input
+                type="checkbox"
+                checked={measurements.includes(m.value)}
+                onChange={() => {
+                  toggleMeasurement(m.value)
+                }}
+              />
+              {m.label}
+            </label>
+          ))}
+        </div>
       </fieldset>
 
       {validationError && <p role="alert">{validationError}</p>}
