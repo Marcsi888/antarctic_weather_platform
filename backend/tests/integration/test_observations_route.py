@@ -386,3 +386,51 @@ def test_utc_offset_timezone_form_is_accepted(client: TestClient, httpx_mock: HT
     # 12:00 UTC displayed in Europe/Madrid (winter, +01:00), regardless of
     # the +02:00 input timezone — output is unconditionally Madrid.
     assert response.json()[0]["datetime"] == "2024-01-15T13:00:00+01:00"
+
+
+def test_latest_available_uses_cache_populated_by_a_prior_observations_query(
+    client: TestClient, httpx_mock: HTTPXMock
+) -> None:
+    _mock_aemet_success(
+        httpx_mock,
+        [
+            {
+                "identificacion": "89070",
+                "fhora": "2024-01-15T13:00:00Z",
+                "temp": 1.0,
+                "pres": 980.0,
+                "vel": 5.0,
+                "qdato": 0.0,
+            }
+        ],
+    )
+    client.get(
+        "/observations",
+        params={
+            "station": "gabriel_de_castilla",
+            "start": "2024-01-15T00:00:00",
+            "end": "2024-01-15T23:00:00",
+            "timezone": "UTC",
+        },
+    )
+
+    response = client.get(
+        "/observations/latest-available", params={"station": "gabriel_de_castilla"}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"latest_available_date": "2024-01-15"}
+
+
+def test_latest_available_invalid_station_returns_400(client: TestClient) -> None:
+    response = client.get(
+        "/observations/latest-available", params={"station": "not_a_real_station"}
+    )
+
+    assert response.status_code == 400
+
+
+def test_latest_available_missing_station_returns_422(client: TestClient) -> None:
+    response = client.get("/observations/latest-available")
+
+    assert response.status_code == 422

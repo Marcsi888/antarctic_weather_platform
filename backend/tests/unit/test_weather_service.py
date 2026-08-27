@@ -29,6 +29,23 @@ class FakeAemetClient:
         return self._observations
 
 
+class ScriptedAemetClient:
+    """Returns a different (possibly empty) result per call, in order — for testing the probe's step-back behavior."""
+
+    def __init__(self, responses: list[list[StationObservation]]) -> None:
+        self._responses = responses
+        self.call_count = 0
+        self.requested_ranges: list[tuple[datetime, datetime]] = []
+
+    async def get_observations(
+        self, station: Station, start: datetime, end: datetime
+    ) -> list[StationObservation]:
+        self.requested_ranges.append((start, end))
+        response = self._responses[self.call_count] if self.call_count < len(self._responses) else []
+        self.call_count += 1
+        return response
+
+
 @pytest.fixture
 def repository(tmp_path: Path) -> ObservationRepository:
     engine = create_sqlite_engine(tmp_path / "test.db")
@@ -217,3 +234,94 @@ async def test_already_cached_chunk_within_a_large_range_is_not_refetched(
     # AEMET call; the first was already cached.
     assert fake_client.call_count == 1
     assert fake_client.requested_ranges[0][0] == datetime(2024, 2, 1, tzinfo=UTC)
+
+
+async def test_get_latest_available_date_uses_cache_without_calling_aemet(
+    repository: ObservationRepository,
+) -> None:
+    repository.store_fetch_result(
+        Station.GABRIEL_DE_CASTILLA,
+        datetime(2024, 1, 15, 0, tzinfo=UTC),
+        datetime(2024, 1, 15, 3, tzinfo=UTC),
+        [_obs(0), _obs(2), _obs(1)],
+    )
+    fake_client = FakeAemetClient([])
+    service = WeatherService(fake_client, repository)
+
+    result = await service.get_latest_available_date(Station.GABRIEL_DE_CASTILLA)
+
+    assert result == datetime(2024, 1, 15, 2, tzinfo=UTC).date()
+    assert fake_client.call_count == 0
+
+
+async def test_get_latest_available_date_probes_aemet_when_cache_is_empty(
+    repository: ObservationRepository,
+) -> None:
+    scripted_client = ScriptedAemetClient([[_obs(5)]])
+    service = WeatherService(scripted_client, repository)
+
+    result = await service.get_latest_available_date(Station.GABRIEL_DE_CASTILLA)
+
+    assert result == datetime(2024, 1, 15, 5, tzinfo=UTC).date()
+    assert scripted_client.call_count == 1
+
+
+async def test_get_latest_available_date_steps_back_until_data_is_found(
+    repository: ObservationRepository,
+) -> None:
+    # First two probe windows come back empty; the third has data.
+    scripted_client = ScriptedAemetClient([[], [], [_obs(3)]])
+    service = WeatherService(scripted_client, repository)
+
+    result = await service.get_latest_available_date(Station.GABRIEL_DE_CASTILLA)
+
+    assert result == datetime(2024, 1, 15, 3, tzinfo=UTC).date()
+    assert scripted_client.call_count == 3
+
+
+async def test_get_latest_available_date_returns_none_after_exhausting_probe_budget(
+    repository: ObservationRepository,
+) -> None:
+    scripted_client = ScriptedAemetClient([])  # every call returns []
+    service = WeatherService(scripted_client, repository)
+
+    result = await service.get_latest_available_date(Station.GABRIEL_DE_CASTILLA)
+
+    assert result is None
+    assert scripted_client.call_count == 6  # bounded, not infinite
+
+
+async def test_get_latest_available_date_caches_result_within_ttl(
+    repository: ObservationRepository,
+) -> None:
+    scripted_client = ScriptedAemetClient([[_obs(5)]])
+    service = WeatherService(scripted_client, repository)
+
+    first = await service.get_latest_available_date(Station.GABRIEL_DE_CASTILLA)
+    second = await service.get_latest_available_date(Station.GABRIEL_DE_CASTILLA)
+
+    assert first == second
+    # Second call must be served from the in-process TTL cache, not a
+    # second cold-cache probe.
+    assert scripted_client.call_count == 1
+
+
+async def test_get_latest_available_date_is_scoped_per_station(
+    repository: ObservationRepository,
+) -> None:
+    repository.store_fetch_result(
+        Station.GABRIEL_DE_CASTILLA,
+        datetime(2024, 1, 15, 0, tzinfo=UTC),
+        datetime(2024, 1, 15, 3, tzinfo=UTC),
+        [_obs(2)],
+    )
+    scripted_client = ScriptedAemetClient([])
+    service = WeatherService(scripted_client, repository)
+
+    # Gabriel de Castilla is cached; Juan Carlos I is not and has to probe.
+    gdc_result = await service.get_latest_available_date(Station.GABRIEL_DE_CASTILLA)
+    jci_result = await service.get_latest_available_date(Station.JUAN_CARLOS_I)
+
+    assert gdc_result == datetime(2024, 1, 15, 2, tzinfo=UTC).date()
+    assert jci_result is None
+    assert scripted_client.call_count == 6  # only the JCI probe hit AEMET

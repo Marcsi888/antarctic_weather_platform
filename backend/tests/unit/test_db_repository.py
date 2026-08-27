@@ -196,3 +196,31 @@ def test_store_fetch_result_with_empty_observations_still_marks_range_fetched(
 
     assert repository.is_range_cached(Station.GABRIEL_DE_CASTILLA, start, end) is True
     assert repository.get_observations(Station.GABRIEL_DE_CASTILLA, start, end) == []
+
+
+def test_get_latest_observed_at_returns_none_for_empty_table(
+    repository: ObservationRepository,
+) -> None:
+    assert repository.get_latest_observed_at(Station.GABRIEL_DE_CASTILLA) is None
+
+
+def test_get_latest_observed_at_returns_the_max_observed_at(
+    repository: ObservationRepository,
+) -> None:
+    start = datetime(2024, 1, 15, 0, tzinfo=UTC)
+    end = datetime(2024, 1, 15, 3, tzinfo=UTC)
+    repository.store_fetch_result(
+        Station.GABRIEL_DE_CASTILLA, start, end, [_obs(0), _obs(2), _obs(1)]
+    )
+
+    latest = repository.get_latest_observed_at(Station.GABRIEL_DE_CASTILLA)
+
+    assert latest == datetime(2024, 1, 15, 2, tzinfo=UTC)
+
+
+def test_get_latest_observed_at_is_scoped_per_station(repository: ObservationRepository) -> None:
+    start = datetime(2024, 1, 15, 0, tzinfo=UTC)
+    end = datetime(2024, 1, 15, 3, tzinfo=UTC)
+    repository.store_fetch_result(Station.GABRIEL_DE_CASTILLA, start, end, [_obs(2)])
+
+    assert repository.get_latest_observed_at(Station.JUAN_CARLOS_I) is None
