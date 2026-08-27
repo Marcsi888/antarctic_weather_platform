@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
@@ -31,6 +31,18 @@ class ObservationRepository:
                 return covering_range is not None
         except SQLAlchemyError as exc:
             raise PersistenceError("Failed to check cache coverage") from exc
+
+    def get_latest_observed_at(self, station: Station) -> datetime | None:
+        """Most recent cached observation for a station, or None if nothing is cached yet."""
+        try:
+            with session_scope(self._session_factory) as session:
+                return session.execute(
+                    select(func.max(ObservationRecord.observed_at)).where(
+                        ObservationRecord.station == station
+                    )
+                ).scalar_one_or_none()
+        except SQLAlchemyError as exc:
+            raise PersistenceError("Failed to read latest cached observation") from exc
 
     def get_observations(
         self, station: Station, start: datetime, end: datetime

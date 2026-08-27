@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
@@ -69,6 +69,12 @@ class ObservationResponse(BaseModel):
     # conceal operationally significant behavior a feasibility study needs.
     wind_speed_max_ms: float | None = None
     observation_count: int
+
+
+class LatestAvailableResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    latest_available_date: date | None
 
 
 def to_response(

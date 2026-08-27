@@ -47,6 +47,15 @@ _MIN_REQUEST_INTERVAL_SECONDS = 0.5
 # real limit is worth more than the conservative default guess.
 _RATE_LIMIT_COOLDOWN_SECONDS = 5.0
 
+# A wide date range is split into many sequential monthly chunks (see
+# WeatherService), each a separate outbound request; sustained traffic
+# like that can trip AEMET's limiter more than once in a row, not just
+# transiently. A single retry (confirmed live) was not enough. Doubling
+# the cooldown each attempt backs off harder the more consecutive 429s
+# are seen, while the attempt cap keeps this bounded — a station AEMET
+# has genuinely blocked still fails, rather than retrying forever.
+_MAX_RATE_LIMIT_RETRIES = 3
+
 
 class AemetClient:
     def __init__(
@@ -138,13 +147,24 @@ class AemetClient:
             # A multi-chunk request (see WeatherService's 31-day
             # splitting) can easily cross AEMET's undocumented limit
             # partway through; aborting the whole query on the first 429
-            # would throw away every chunk already fetched. One retry
-            # after the cooldown gives the request a real chance to
-            # succeed instead of failing outright on transient pressure.
-            self._apply_rate_limit_cooldown()
-            logger.warning("AEMET returned 429, retrying once after cooldown: %s", url)
-            await asyncio.sleep(self._rate_limit_cooldown_seconds)
-            response = await self._throttled_get(url, headers=headers)
+            # would throw away every chunk already fetched. Retries with
+            # doubling cooldowns give sustained sequential traffic a real
+            # chance to succeed instead of failing outright after a single
+            # attempt.
+            for attempt in range(1, _MAX_RATE_LIMIT_RETRIES + 1):
+                cooldown = self._rate_limit_cooldown_seconds * (2 ** (attempt - 1))
+                self._apply_rate_limit_cooldown(cooldown)
+                logger.warning(
+                    "AEMET returned 429, retry %d/%d after %.1fs cooldown: %s",
+                    attempt,
+                    _MAX_RATE_LIMIT_RETRIES,
+                    cooldown,
+                    url,
+                )
+                await asyncio.sleep(cooldown)
+                response = await self._throttled_get(url, headers=headers)
+                if response.status_code != 429:
+                    break
         elif response.status_code in _RETRYABLE_STATUS_CODES:
             logger.warning(
                 "AEMET returned %s, retrying once: %s", response.status_code, url
@@ -164,12 +184,8 @@ class AemetClient:
             self._next_allowed_time = time.monotonic() + self._min_request_interval_seconds
         return await self._http_client.get(url, headers=headers)
 
-    def _apply_rate_limit_cooldown(self) -> None:
-        logger.warning(
-            "AEMET returned 429; applying a %.1fs cooldown before further requests",
-            self._rate_limit_cooldown_seconds,
-        )
-        self._next_allowed_time = time.monotonic() + self._rate_limit_cooldown_seconds
+    def _apply_rate_limit_cooldown(self, cooldown_seconds: float) -> None:
+        self._next_allowed_time = time.monotonic() + cooldown_seconds
 
     def _raise_for_unexpected_status(self, response: httpx.Response) -> None:
         if response.status_code in (401, 403):

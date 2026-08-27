@@ -4,7 +4,13 @@ from fastapi import APIRouter, Query
 from pydantic import ValidationError as PydanticValidationError
 
 from app.api.dependencies import WeatherServiceDep
-from app.api.schemas import Measurement, ObservationQuery, ObservationResponse, to_response
+from app.api.schemas import (
+    LatestAvailableResponse,
+    Measurement,
+    ObservationQuery,
+    ObservationResponse,
+    to_response,
+)
 from app.core.exceptions import UnknownStationError
 from app.core.exceptions import ValidationError as AppValidationError
 from app.domain.aggregation import AggregationLevel
@@ -83,3 +89,13 @@ async def get_observations(
     )
 
     return [to_response(r, query.measurements) for r in results]
+
+
+@router.get("/observations/latest-available", response_model=LatestAvailableResponse)
+async def get_latest_available(
+    service: WeatherServiceDep,
+    station: str = Query(..., description="gabriel_de_castilla or juan_carlos_i"),
+) -> LatestAvailableResponse:
+    resolved_station = _resolve_station(station)
+    latest_date = await service.get_latest_available_date(resolved_station)
+    return LatestAvailableResponse(latest_available_date=latest_date)
