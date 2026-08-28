@@ -58,7 +58,7 @@ async def get_observations(
     # validated, in-domain type), but a `mode="before"` validator accepts
     # the raw query string and parses it strictly. mypy sees the field's
     # declared type, not the validator's input type, and flags this as a
-    # str/datetime mismatch — a real, narrow gap in what mypy can infer
+    # str/datetime mismatch, a real, narrow gap in what mypy can infer
     # about Pydantic's dynamic validation, same as get_settings() in
     # app/core/config.py.
     try:

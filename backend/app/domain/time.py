@@ -6,7 +6,7 @@ from app.core.exceptions import InvalidTimezoneError, NonexistentLocalTimeError
 
 OUTPUT_TIMEZONE = ZoneInfo("Europe/Madrid")
 
-# The AEMET request format is documented as AAAA-MM-DDTHH:MM:SSUTC — a
+# The AEMET request format is documented as AAAA-MM-DDTHH:MM:SSUTC, a
 # literal "UTC" suffix, not an ISO 8601 offset or "Z". Verified against a
 # live AEMET response during integration testing; this is not an assumption.
 AEMET_REQUEST_DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%SUTC"

@@ -30,7 +30,7 @@ class FakeAemetClient:
 
 
 class ScriptedAemetClient:
-    """Returns a different (possibly empty) result per call, in order — for testing the probe's step-back behavior."""
+    """Returns a different (possibly empty) result per call, in order: for testing the probe's step-back behavior."""
 
     def __init__(self, responses: list[list[StationObservation]]) -> None:
         self._responses = responses

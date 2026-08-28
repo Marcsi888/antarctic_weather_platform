@@ -12,8 +12,8 @@ Antarctica, so wind speed, temperature, and pressure are the measurements of
 interest.
 
 The quality bar is not "does it run," but whether every decision in the
-system — station identifiers, timezone handling, aggregation semantics,
-cache design, error handling — can be defended in a follow-up technical
+system (station identifiers, timezone handling, aggregation semantics,
+cache design, error handling) can be defended in a follow-up technical
 interview. The plan below exists to keep that standard visible throughout
 the week rather than only at submission time.
 
@@ -23,14 +23,14 @@ the week rather than only at submission time.
 - Internal implementation-complete target: **26 August 2026**
 
 The two-day gap is deliberate, not padding. Historical-data integrations
-tend to reveal their real problems late — a station identifier that turns
+tend to reveal their real problems late: a station identifier that turns
 out wrong, a DST edge case that only shows up when a test interval happens
 to cross a transition, a response field that AEMET populates inconsistently
 across stations. Reserving 27–28 August for QA, documentation, screenshots,
 and repository cleanup means those discoveries don't compete with
 first-draft implementation work under time pressure. If implementation
 finishes before 26 August, the extra time moves forward into validation and
-polish rather than sitting idle — it does not justify inventing more scope.
+polish rather than sitting idle, though it does not justify inventing more scope.
 
 ## 3. Engineering Priorities
 
@@ -54,62 +54,62 @@ polish, not on the things a reviewer would actually probe.
 
 ## 4. Development Phases
 
-**Phase 0 — Requirements and architecture.** Read the challenge
+**Phase 0: Requirements and architecture.** Read the challenge
 specification closely, resolve ambiguities I can resolve from documentation,
 flag the ones I can't, and agree on a minimal layered architecture and
 repository layout before any code exists.
 
-**Phase 1 — Python project foundation.** Project scaffolding: dependency
+**Phase 1: Python project foundation.** Project scaffolding: dependency
 management, FastAPI app skeleton, settings/config module reading from
 environment variables, logging configuration, exception hierarchy. No
 AEMET or domain logic yet.
 
-**Phase 2 — AEMET integration.** Before writing the client: confirm the
+**Phase 2: AEMET integration.** Before writing the client: confirm the
 endpoint contract against real documentation and, if credentials are
-available, an actual response — station identifiers, the two-step
+available, an actual response: station identifiers, the two-step
 response pattern (AEMET's `datos`/`metadatos` indirection is expected but
 must be confirmed, not assumed), field types, and error behavior. Then
 build a typed client with explicit timeouts, response validation, and a
 transport-DTO-to-domain-model mapping boundary.
 
-**Phase 3 — Timezone and aggregation domain logic.** Implement the
+**Phase 3: Timezone and aggregation domain logic.** Implement the
 instant/local-representation/UTC/offset/DST transformation pipeline as an
 isolated module, independent of the API layer, so it can be unit tested
 against known DST transition dates. Implement hourly/daily/monthly
 aggregation using the documented mean-based approach, isolated behind a
 function boundary that documents the assumption.
 
-**Phase 4 — SQLite persistence and caching.** Schema design, uniqueness
+**Phase 4: SQLite persistence and caching.** Schema design, uniqueness
 constraints derived from observation identity, and interval-coverage logic
 for cache hit/miss/partial-coverage. This phase depends on Phase 2 (data
 shape) and Phase 3 (canonical timestamp representation) being settled.
 
-**Phase 5 — Backend API completion and tests.** Wire the service layer to
+**Phase 5: Backend API completion and tests.** Wire the service layer to
 routes, finish request validation (station, interval, measurement
 selection), and write the backend test suite: unit tests for domain logic,
 integration tests for the endpoint with the AEMET client mocked.
 
-**Phase 6 — React/TypeScript frontend.** Vite + React + TypeScript scaffold,
+**Phase 6: React/TypeScript frontend.** Vite + React + TypeScript scaffold,
 typed API client, query form (station, interval, aggregation, measurements),
 results table, and a lightweight chart.
 
-**Phase 7 — Frontend tests and integration.** Vitest + React Testing
+**Phase 7: Frontend tests and integration.** Vitest + React Testing
 Library coverage for form validation, loading/success/error/empty states,
 and one interaction test involving aggregation or measurement filtering.
 Manual end-to-end check against the running backend.
 
-**Phase 8 — CI and Docker.** GitHub Actions workflows for backend
+**Phase 8: CI and Docker.** GitHub Actions workflows for backend
 (lint/type-check/test) and frontend (lint/type-check/test/build). Docker
 Compose so `docker compose up --build` runs the full stack locally.
 
-**Phase 9 — Documentation and C4 architecture.** README, lightweight C4
+**Phase 9: Documentation and C4 architecture.** README, lightweight C4
 System Context and Container diagrams reflecting what was actually built.
 
-**Phase 10 — English technical report.** LaTeX report focused on the
+**Phase 10: English technical report.** LaTeX report focused on the
 reasoning behind key decisions, written after the system is stable so it
 describes the real implementation rather than the intended one.
 
-**Phase 11 — Final QA and optional Spanish report.** Fresh-clone
+**Phase 11: Final QA and optional Spanish report.** Fresh-clone
 evaluator-experience test, final review against the checklist in §10, and
 only then an optional Spanish translation of the report.
 
@@ -120,8 +120,8 @@ completion by **26 August 2026**:
 
 | Date | Focus | Depends on |
 |---|---|---|
-| 22 Aug | Phase 0: requirements, ambiguities, architecture, repo structure. Phase 1: project foundation (config, logging, exception hierarchy, FastAPI skeleton). | — |
-| 23 Aug | Phase 2: AEMET client — spec verification first, then implementation with tests against mocked responses. | Phase 1 |
+| 22 Aug | Phase 0: requirements, ambiguities, architecture, repo structure. Phase 1: project foundation (config, logging, exception hierarchy, FastAPI skeleton). | - |
+| 23 Aug | Phase 2: AEMET client, spec verification first, then implementation with tests against mocked responses. | Phase 1 |
 | 24 Aug | Phase 3: timezone/DST module and aggregation module, each with focused unit tests. Phase 4 begins: SQLite schema and cache-coverage logic. | Phase 2 |
 | 25 Aug | Phase 4 finishes: persistence + cache integrated. Phase 5: API routes wired end-to-end, backend test suite filled out (validation, cache hit/miss, upstream failure modes). | Phase 3, 4 |
 | 26 Aug | Phase 6: React/TypeScript frontend (form, table, chart). Phase 7: frontend tests. Backend implementation-complete checkpoint. | Phase 5 |
@@ -129,7 +129,7 @@ completion by **26 August 2026**:
 | 28 Aug | Phase 10: English technical report. Final QA pass against §10 checklist. Repository cleanup. Submission. Spanish translation only if time remains and does not threaten the English deliverable. | Phase 9 |
 
 The frontend is compressed into a single day (26 Aug) because its scope is
-bounded — one form, one table, one chart, typed throughout — and because
+bounded (one form, one table, one chart, typed throughout) and because
 backend correctness is the higher-priority item if something upstream (the
 AEMET client, timezone handling) takes longer than expected on 23–24 Aug.
 If Phase 2 or 3 slips, the frontend day is the first thing I'd compress
@@ -166,12 +166,12 @@ None of these are implemented before the required scope in §3 is solid.
 ## 8. Commit Strategy
 
 Commits will follow Conventional Commits and correspond to genuine
-engineering milestones — a working configuration layer, a tested AEMET
-client, a complete aggregation module — not to calendar days or arbitrary
+engineering milestones (a working configuration layer, a tested AEMET
+client, a complete aggregation module), not to calendar days or arbitrary
 checkpoints. No commit will be split or merged purely to make the history
 look a particular way, and no commit will claim work happened on a day it
 didn't. At each milestone I'll propose the exact files to stage and a
-commit message, and wait for approval before committing — nothing here
+commit message, and wait for approval before committing. Nothing here
 authorizes autonomous commits.
 
 ## 9. Definition of Done

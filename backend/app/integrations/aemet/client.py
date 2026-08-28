@@ -52,7 +52,7 @@ _RATE_LIMIT_COOLDOWN_SECONDS = 5.0
 # like that can trip AEMET's limiter more than once in a row, not just
 # transiently. A single retry (confirmed live) was not enough. Doubling
 # the cooldown each attempt backs off harder the more consecutive 429s
-# are seen, while the attempt cap keeps this bounded — a station AEMET
+# are seen, while the attempt cap keeps this bounded: a station AEMET
 # has genuinely blocked still fails, rather than retrying forever.
 _MAX_RATE_LIMIT_RETRIES = 3
 
@@ -215,7 +215,7 @@ class AemetClient:
         # estado: 404 with no datos/metadatos fields at all. The same
         # estado: 404 wrapper is also used for a range exceeding AEMET's
         # undocumented ~31-day limit ("El rango de fechas no puede ser
-        # superior a 1 mes") — a rejected request, not an empty result —
+        # superior a 1 mes"), a rejected request, not an empty result,
         # distinguished only by the descripcion text, since AEMET gives
         # no separate status code for it.
         if isinstance(body, dict) and body.get("estado") == 404:

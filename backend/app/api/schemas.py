@@ -9,7 +9,7 @@ from app.domain.aggregation import AggregatedObservation, AggregationLevel
 # value whose timezone is supplied separately (the `timezone` field), not
 # embedded in the string. This is stricter than Pydantic's default
 # datetime parsing, which would also accept an offset-bearing string and
-# silently produce an aware datetime — which app.domain.time.to_utc_instant
+# silently produce an aware datetime, which app.domain.time.to_utc_instant
 # explicitly rejects, since pairing a wall-clock value with a timezone is
 # this system's job, not the caller's.
 _INPUT_DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S"

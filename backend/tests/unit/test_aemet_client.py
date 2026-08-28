@@ -130,7 +130,7 @@ async def test_get_observations_range_too_long_raises_distinct_error(
     # Confirmed live: AEMET rejects requests over ~31 days with the same
     # estado: 404 wrapper used for a genuine empty result, distinguished
     # only by the descripcion text. Must not be silently treated as "no
-    # data" — this is a rejected request, not an empty one.
+    # data": this is a rejected request, not an empty one.
     httpx_mock.add_response(
         url=_envelope_url(Station.GABRIEL_DE_CASTILLA),
         status_code=200,
@@ -157,7 +157,7 @@ async def test_get_observations_429_retries_once_then_succeeds(
     # into several calls) can cross AEMET's undocumented limit partway
     # through; failing the whole query on the first 429 would discard
     # every chunk already fetched. Retrying after the cooldown gives it a
-    # real chance to succeed — this covers succeeding on the first retry;
+    # real chance to succeed. This covers succeeding on the first retry;
     # see the sustained-429 test below for the multi-retry path.
     httpx_mock.add_response(url=_envelope_url(Station.GABRIEL_DE_CASTILLA), status_code=429)
     httpx_mock.add_response(
@@ -177,7 +177,7 @@ async def test_get_observations_429_retries_multiple_times_then_succeeds(
 ) -> None:
     # Confirmed against real, sustained AEMET traffic: a wide multi-chunk
     # query can trip the rate limiter more than once in a row, not just
-    # transiently — a single retry was not enough in practice. Three 429s
+    # transiently: a single retry was not enough in practice. Three 429s
     # followed by success must still succeed, within the retry budget.
     for _ in range(3):
         httpx_mock.add_response(url=_envelope_url(Station.GABRIEL_DE_CASTILLA), status_code=429)

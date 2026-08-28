@@ -143,7 +143,7 @@ def test_invalid_timezone_returns_400(client: TestClient) -> None:
 
 def test_missing_required_param_returns_422(client: TestClient) -> None:
     # FastAPI's own required-param validation, distinct from our domain
-    # validation (400) — this is Pydantic/FastAPI rejecting the request
+    # validation (400): this is Pydantic/FastAPI rejecting the request
     # before it ever reaches our code.
     response = client.get("/observations", params={"start": "2024-01-15T00:00:00"})
 
@@ -384,7 +384,7 @@ def test_utc_offset_timezone_form_is_accepted(client: TestClient, httpx_mock: HT
 
     assert response.status_code == 200
     # 12:00 UTC displayed in Europe/Madrid (winter, +01:00), regardless of
-    # the +02:00 input timezone — output is unconditionally Madrid.
+    # the +02:00 input timezone: output is unconditionally Madrid.
     assert response.json()[0]["datetime"] == "2024-01-15T13:00:00+01:00"
 
 

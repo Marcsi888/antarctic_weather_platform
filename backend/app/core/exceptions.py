@@ -35,15 +35,15 @@ class AemetError(ApplicationError):
 
 
 class AemetUnavailableError(AemetError):
-    """Network/timeout/5xx/429 — retrying the same request later may succeed."""
+    """Network/timeout/5xx/429: retrying the same request later may succeed."""
 
 
 class AemetAuthenticationError(AemetError):
-    """AEMET rejected the API key (401/403) — a configuration problem, not an outage."""
+    """AEMET rejected the API key (401/403): a configuration problem, not an outage."""
 
 
 class AemetResponseError(AemetError):
-    """Malformed or unexpected payload shape — retrying would fail identically."""
+    """Malformed or unexpected payload shape: retrying would fail identically."""
 
 
 class AemetRangeTooLongError(AemetError):

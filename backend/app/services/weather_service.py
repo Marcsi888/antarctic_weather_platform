@@ -10,7 +10,7 @@ from app.integrations.aemet.schemas import Station, StationObservation
 
 logger = logging.getLogger(__name__)
 
-# AEMET has no "latest available date" endpoint at all — it is a pure
+# AEMET has no "latest available date" endpoint at all: it is a pure
 # range-query API. The probe fallback below steps back through recent
 # windows looking for the first one with data; bounded so a station with
 # no AEMET coverage at all (shouldn't happen in practice, but must not
@@ -28,7 +28,7 @@ _LATEST_AVAILABLE_TTL_SECONDS = 3600.0
 # empirically ("El rango de fechas no puede ser superior a 1 mes"). Not
 # documented anywhere; discovered by a real query over a full year
 # returning far fewer observations than it should have, silently, rather
-# than an error — see AemetRangeTooLongError. 31 rather than 30: a
+# than an error, see AemetRangeTooLongError. 31 rather than 30: a
 # request from the 1st to the 1st of the following month (a true calendar
 # month) is exactly 31 days for the longest months and was confirmed to
 # succeed; 32 days was confirmed to fail.
