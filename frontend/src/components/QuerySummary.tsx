@@ -49,7 +49,7 @@ export function QuerySummary({ query, data }: QuerySummaryProps) {
         <dd>
           {summary.periodStart !== null && summary.periodEnd !== null
             ? `${summary.periodStart} – ${summary.periodEnd}`
-            : '—'}
+            : '-'}
         </dd>
       </div>
       <div>

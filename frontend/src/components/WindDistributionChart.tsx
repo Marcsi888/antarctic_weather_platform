@@ -17,7 +17,7 @@ export function WindDistributionChart({ data }: WindDistributionChartProps) {
   if (buckets.length === 0) {
     return (
       <p className="results-empty">
-        No wind speed data available for this query to build a distribution from — try including
+        No wind speed data available for this query to build a distribution from. Try including
         wind speed in the requested measurements, or a different date range.
       </p>
     )
@@ -31,11 +31,11 @@ export function WindDistributionChart({ data }: WindDistributionChartProps) {
         <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
         <Tooltip
           formatter={(value: number | string | readonly (number | string)[] | undefined) => [
-            typeof value === 'number' ? value : '—',
+            typeof value === 'number' ? value : '-',
             'Observations',
           ]}
         />
-        <Bar dataKey="count" name="Observations" fill="#2471a3" />
+        <Bar dataKey="count" name="Observations" fill="var(--wind)" />
       </BarChart>
     </ResponsiveContainer>
   )

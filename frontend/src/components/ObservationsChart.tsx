@@ -26,7 +26,7 @@ function formatTooltipValue(
   value: number | string | readonly (number | string)[] | undefined,
 ): string {
   if (value === undefined) {
-    return '—'
+    return '-'
   }
   if (typeof value === 'number') {
     return value.toFixed(1)
@@ -71,7 +71,7 @@ function SeriesPanel({ data, title, children }: SeriesPanelProps) {
 
 // Lines are not connectNulls: a null value (a bucket with no valid
 // readings, or a measurement not requested) is a real absence, not an
-// interpolation opportunity — the same reasoning behind the backend
+// interpolation opportunity, the same reasoning behind the backend
 // reporting null rather than 0.0 for an all-bad-quality bucket.
 export function ObservationsChart({ data }: ObservationsChartProps) {
   const hasTemperature = data.some((d) => d.temperatureCelsius !== null)
@@ -91,7 +91,7 @@ export function ObservationsChart({ data }: ObservationsChartProps) {
             type="monotone"
             dataKey="temperatureCelsius"
             name="Temperature (°C)"
-            stroke="#c0392b"
+            stroke="var(--temp)"
             dot={false}
           />
         </SeriesPanel>
@@ -103,7 +103,7 @@ export function ObservationsChart({ data }: ObservationsChartProps) {
               type="monotone"
               dataKey="windSpeedMs"
               name="Wind speed, mean (m/s)"
-              stroke="#2471a3"
+              stroke="var(--wind)"
               dot={false}
             />
           )}
@@ -112,7 +112,8 @@ export function ObservationsChart({ data }: ObservationsChartProps) {
               type="monotone"
               dataKey="windSpeedMaxMs"
               name="Wind speed, max (m/s)"
-              stroke="#5dade2"
+              stroke="var(--wind)"
+              strokeOpacity={0.55}
               strokeDasharray="4 3"
               dot={false}
             />
@@ -125,7 +126,7 @@ export function ObservationsChart({ data }: ObservationsChartProps) {
             type="monotone"
             dataKey="pressureHpa"
             name="Pressure (hPa)"
-            stroke="#7d3c98"
+            stroke="var(--pressure)"
             dot={false}
           />
         </SeriesPanel>

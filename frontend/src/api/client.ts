@@ -1,4 +1,4 @@
-import type { ObservationQuery, ObservationResponse } from '../types/api'
+import type { ObservationQuery, ObservationResponse, Station } from '../types/api'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 
@@ -69,7 +69,7 @@ export async function getObservations(
     response = await fetch(url)
   } catch {
     // fetch() itself throws only on network failure (offline, DNS,
-    // CORS block) — never on a non-2xx status, which is handled below.
+    // CORS block), never on a non-2xx status, which is handled below.
     throw new ApiError(0, 'Could not reach the server. Check your connection.')
   }
 
@@ -87,4 +87,33 @@ export async function getObservations(
     throw new ApiError(0, 'Malformed response: expected an array')
   }
   return data.map(parseObservation)
+}
+
+// null means either "unknown" (request failed) or "AEMET genuinely has no
+// data for this station": both are treated the same way by callers
+// (don't restrict the date picker), so the distinction isn't surfaced.
+export async function getLatestAvailableDate(station: Station): Promise<string | null> {
+  const url = `${API_BASE_URL}/observations/latest-available?station=${encodeURIComponent(station)}`
+
+  let response: Response
+  try {
+    response = await fetch(url)
+  } catch {
+    return null
+  }
+
+  if (!response.ok) {
+    return null
+  }
+
+  const data: unknown = await response.json().catch(() => null)
+  if (
+    data === null ||
+    typeof data !== 'object' ||
+    !('latest_available_date' in data) ||
+    typeof data.latest_available_date !== 'string'
+  ) {
+    return null
+  }
+  return data.latest_available_date
 }

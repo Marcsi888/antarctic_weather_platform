@@ -9,7 +9,7 @@ function formatTooltipValue(
   value: number | string | readonly (number | string)[] | undefined,
 ): string {
   if (value === undefined) {
-    return '—'
+    return '-'
   }
   if (typeof value === 'number') {
     return value.toFixed(1)
@@ -45,7 +45,7 @@ export function WindTimeSeriesLine({ data }: WindTimeSeriesLineProps) {
             type="monotone"
             dataKey="windSpeedMs"
             name="Wind speed, mean (m/s)"
-            stroke="#2471a3"
+            stroke="var(--wind)"
             dot={false}
           />
         )}
@@ -54,7 +54,8 @@ export function WindTimeSeriesLine({ data }: WindTimeSeriesLineProps) {
             type="monotone"
             dataKey="windSpeedMaxMs"
             name="Wind speed, max (m/s)"
-            stroke="#5dade2"
+            stroke="var(--wind)"
+            strokeOpacity={0.55}
             strokeDasharray="4 3"
             dot={false}
           />

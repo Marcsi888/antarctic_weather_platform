@@ -1,5 +1,7 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { ApiError, getObservations } from './api/client'
+import { CompactHeader, Hero } from './components/Hero'
+import { IntroFeatures } from './components/IntroFeatures'
 import { ObservationsChart } from './components/ObservationsChart'
 import { ObservationsTable } from './components/ObservationsTable'
 import { QueryForm } from './components/QueryForm'
@@ -16,6 +18,7 @@ export default function App() {
   // only source for them. Everything else shown in the UI is derived
   // from requestState.data itself, not duplicated into separate state.
   const [lastSubmittedQuery, setLastSubmittedQuery] = useState<ObservationQuery | null>(null)
+  const filterBarRef = useRef<HTMLElement>(null)
 
   async function handleSubmit(query: ObservationQuery) {
     setRequestState({ status: 'loading' })
@@ -32,71 +35,90 @@ export default function App() {
   }
 
   return (
-    <div className="page">
-      <header className="page-header">
-        <h1>Antarctic Weather Platform</h1>
-        <p>
-          Historical weather observations from AEMET OpenData for the Gabriel de Castilla and
-          Juan Carlos I Antarctic stations.
-        </p>
-      </header>
+    <>
+      {/* The full landscape/CTA/stats hero only appears before a query
+          exists: its job is to set context, which the results themselves
+          take over once on screen (station, range, and units already
+          appear in the query summary). It's swapped for a compact variant
+          rather than removed entirely, so the page keeps its identity
+          instead of going headless once the analytical workspace takes
+          over the page's attention. */}
+      {requestState.status === 'idle' ? (
+        <Hero
+          onStartQuery={() => {
+            filterBarRef.current?.scrollIntoView({
+              behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
+                ? 'auto'
+                : 'smooth',
+              block: 'start',
+            })
+          }}
+        />
+      ) : (
+        <CompactHeader />
+      )}
 
-      <section aria-label="Query parameters" className="filter-bar">
-        <QueryForm onSubmit={handleSubmit} disabled={requestState.status === 'loading'} />
-      </section>
+      <div className="page">
+        <section aria-label="Query parameters" className="filter-bar" ref={filterBarRef}>
+          <QueryForm onSubmit={handleSubmit} disabled={requestState.status === 'loading'} />
+        </section>
 
-      <main>
-        {requestState.status === 'idle' && (
-          <section>
-            <p className="results-idle">Submit a query to see observations.</p>
-          </section>
-        )}
-
-        {requestState.status === 'loading' && (
-          <section>
-            <p role="status">Loading observations…</p>
-          </section>
-        )}
-
-        {requestState.status === 'error' && (
-          <section>
-            <p role="alert">
-              {requestState.error.status === 0
-                ? requestState.error.message
-                : `Request failed: ${requestState.error.message}`}
-            </p>
-          </section>
-        )}
-
-        {requestState.status === 'success' && lastSubmittedQuery && (
-          <>
-            <section aria-label="Query summary">
-              <h2>Query summary</h2>
-              <QuerySummary query={lastSubmittedQuery} data={requestState.data} />
+        <main>
+          {requestState.status === 'idle' && (
+            <section>
+              <IntroFeatures />
             </section>
+          )}
 
-            <section aria-label="Summary metrics">
-              <h2>Key statistics</h2>
-              <SummaryMetrics data={requestState.data} />
+          {requestState.status === 'loading' && (
+            <section>
+              <p role="status">
+                <span className="spinner" aria-hidden="true" />
+                Loading observations…
+              </p>
             </section>
+          )}
 
-            <section aria-label="Wind energy analysis">
-              <h2>Wind energy analysis</h2>
-              <WindEnergyView data={requestState.data} />
+          {requestState.status === 'error' && (
+            <section>
+              <p role="alert">
+                {requestState.error.status === 0
+                  ? requestState.error.message
+                  : `Request failed: ${requestState.error.message}`}
+              </p>
             </section>
+          )}
 
-            <section aria-label="Time series">
-              <h2>Time series</h2>
-              <ObservationsChart data={requestState.data} />
-            </section>
+          {requestState.status === 'success' && lastSubmittedQuery && (
+            <>
+              <section aria-label="Summary metrics">
+                <h2>Key statistics</h2>
+                <SummaryMetrics data={requestState.data} />
+              </section>
 
-            <section aria-label="Observations table">
-              <h2>Weather observations</h2>
-              <ObservationsTable data={requestState.data} />
-            </section>
-          </>
-        )}
-      </main>
-    </div>
+              <section aria-label="Time series">
+                <h2>Time series</h2>
+                <ObservationsChart data={requestState.data} />
+              </section>
+
+              <section aria-label="Wind energy analysis" className="wind-energy-section">
+                <h2>Wind energy analysis</h2>
+                <WindEnergyView data={requestState.data} />
+              </section>
+
+              <section aria-label="Query summary">
+                <h2>Query summary</h2>
+                <QuerySummary query={lastSubmittedQuery} data={requestState.data} />
+              </section>
+
+              <section aria-label="Observations table">
+                <h2>Weather observations</h2>
+                <ObservationsTable data={requestState.data} />
+              </section>
+            </>
+          )}
+        </main>
+      </div>
+    </>
   )
 }

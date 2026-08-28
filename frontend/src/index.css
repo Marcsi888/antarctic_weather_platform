@@ -6,9 +6,33 @@
   --border: #d8dbe1;
   --accent: #2471a3;
   --accent-hover: #1d5c85;
+  --accent-subtle: color-mix(in srgb, #2471a3 6%, #ffffff);
   --error: #b3261e;
   --error-bg: #fdecea;
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.08);
+
+  /* Hero-only atmospheric palette. Deliberately not theme-varying: the
+     hero is a single fixed polar-night gradient regardless of light/dark
+     mode, same reasoning as a dark-mode-only illustration — inverting it
+     would fight the "layered polar visual" concept, not serve it. Never
+     used outside .hero. */
+  --polar-deep: #0d2b3e;
+  --polar-mid: #1c4f6b;
+  --glacial-cyan: #5fb8c9;
+  --glacial-pale: #cfe8ec;
+  --station-marker: #ffb45c;
+
+  /* Semantic measurement palette: one hue family per variable, used
+     consistently across charts, legends, KPI cards, measurement
+     controls, and tooltips. Distinct from --accent (which stays for
+     interactive chrome: buttons, focus rings, links) so a measurement's
+     color always means the same thing everywhere it appears. */
+  --wind: #1c7c93;
+  --wind-soft: #e4f2f5;
+  --temp: #c0572e;
+  --temp-soft: #fbeae3;
+  --pressure: #5b4b8a;
+  --pressure-soft: #eee9f7;
 
   color-scheme: light dark;
   font: 15px/1.5 system-ui, 'Segoe UI', Roboto, sans-serif;
@@ -26,9 +50,17 @@
     --border: #2e303a;
     --accent: #6fa8dc;
     --accent-hover: #8ec0e8;
+    --accent-subtle: color-mix(in srgb, #6fa8dc 10%, #1c1d24);
     --error: #f2b8b5;
     --error-bg: #3b1e1e;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.4);
+
+    --wind: #5fb8c9;
+    --wind-soft: color-mix(in srgb, #5fb8c9 16%, #1c1d24);
+    --temp: #e08a5f;
+    --temp-soft: color-mix(in srgb, #e08a5f 16%, #1c1d24);
+    --pressure: #9382c9;
+    --pressure-soft: color-mix(in srgb, #9382c9 16%, #1c1d24);
   }
 }
 
@@ -44,6 +76,290 @@ body {
   max-width: 1280px;
   margin: 0 auto;
   padding: 28px 24px 80px;
+}
+
+/* ============ Hero ============ */
+/* Full-bleed, sits outside .page's max-width so the polar gradient spans
+   the viewport edge to edge, matching the approved design. The only place
+   in the app using the atmospheric palette or a non-neutral background —
+   everything below stays on the existing light/dark workspace tokens. */
+.hero {
+  background: linear-gradient(160deg, var(--polar-deep) 0%, var(--polar-mid) 55%, #2a6b83 100%);
+  color: var(--glacial-pale);
+  position: relative;
+  overflow: hidden;
+}
+
+.hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: repeating-radial-gradient(
+    circle at 78% 30%,
+    transparent 0,
+    transparent 38px,
+    rgba(207, 232, 236, 0.045) 39px,
+    rgba(207, 232, 236, 0.045) 40px
+  );
+  pointer-events: none;
+}
+
+.hero-grid {
+  position: relative;
+  z-index: 1;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 56px 24px 0;
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
+  gap: 40px;
+  align-items: center;
+}
+
+.hero-eyebrow {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--glacial-cyan);
+  margin: 0 0 14px;
+}
+
+.hero h1 {
+  font-family: 'Archivo Expanded', system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 38px;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+  margin: 0 0 18px;
+  text-wrap: balance;
+  color: #fff;
+}
+
+.hero-copy {
+  font-size: 15.5px;
+  line-height: 1.6;
+  color: var(--glacial-pale);
+  max-width: 46ch;
+  margin: 0 0 28px;
+  opacity: 0.92;
+}
+
+.hero-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--glacial-cyan);
+  color: var(--polar-deep);
+  font-weight: 600;
+  font-size: 14px;
+  padding: 12px 22px;
+  border-radius: 7px;
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 4px 18px rgba(95, 184, 201, 0.35);
+  transition: transform 0.15s ease;
+}
+
+.hero-cta:hover {
+  transform: translateY(-1px);
+}
+
+.hero-cta:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.hero-visual {
+  height: 280px;
+}
+
+.hero-landscape {
+  width: 100%;
+  height: 100%;
+}
+
+.station-pin {
+  fill: var(--station-marker);
+}
+
+.station-pin-ring {
+  fill: none;
+  stroke: var(--station-marker);
+  stroke-width: 1.5;
+  opacity: 0.5;
+}
+
+.station-label {
+  font-size: 11px;
+  font-weight: 600;
+  fill: var(--glacial-pale);
+}
+
+/* Compact variant: persists across loading/error/success so the page
+   keeps the same polar identity once results are on screen, without the
+   landscape/CTA/stats competing with the analytical workspace below. */
+.hero--compact .hero-grid {
+  padding: 20px 24px;
+  grid-template-columns: 1fr;
+}
+
+.hero--compact .hero-eyebrow {
+  margin: 0 0 4px;
+}
+
+.hero-compact-title {
+  font-family: 'Archivo Expanded', system-ui, sans-serif;
+  font-size: 20px;
+  font-weight: 700;
+  color: #fff;
+  margin: 0;
+}
+
+.hero-stats {
+  position: relative;
+  z-index: 1;
+  max-width: 1280px;
+  margin: 40px auto 0;
+  padding: 0 24px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border-top: 1px solid rgba(207, 232, 236, 0.18);
+}
+
+.hero-stat {
+  padding: 20px 24px 20px 0;
+  border-right: 1px solid rgba(207, 232, 236, 0.18);
+}
+
+.hero-stat:first-child {
+  padding-left: 0;
+}
+
+.hero-stat:last-child {
+  border-right: none;
+}
+
+.hero-stat-value {
+  font-family: 'Archivo Expanded', system-ui, sans-serif;
+  font-size: 24px;
+  font-weight: 700;
+  color: #fff;
+  margin: 0 0 2px;
+}
+
+.hero-stat-label {
+  font-size: 12px;
+  color: var(--glacial-cyan);
+  margin: 0;
+  letter-spacing: 0.02em;
+}
+
+/* ============ Intro features (idle state only) ============ */
+.intro-features {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.intro-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.intro-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.intro-card-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+.intro-card h3 {
+  font-size: 14px;
+  font-weight: 700;
+  margin: 0 0 6px;
+}
+
+.intro-card p {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.intro-card--wind .intro-card-icon {
+  background: var(--wind-soft);
+  color: var(--wind);
+}
+
+.intro-card--temp .intro-card-icon {
+  background: var(--temp-soft);
+  color: var(--temp);
+}
+
+.intro-card--pressure .intro-card-icon {
+  background: var(--pressure-soft);
+  color: var(--pressure);
+}
+
+.flow-strip {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 20px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  font-weight: 500;
+  line-height: 1.8;
+  margin: 0;
+}
+
+.flow-strip .flow-node {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.flow-strip .flow-arrow {
+  color: var(--border);
+  font-weight: 400;
+}
+
+@media (max-width: 900px) {
+  .hero-grid {
+    grid-template-columns: 1fr;
+    padding-top: 40px;
+  }
+
+  .hero-visual {
+    height: 180px;
+  }
+
+  .hero h1 {
+    font-size: 30px;
+  }
+
+  .hero-stat {
+    padding: 16px 12px 16px 0;
+  }
+
+  .hero-stat:first-child {
+    padding-left: 0;
+  }
+
+  .intro-cards {
+    grid-template-columns: 1fr;
+  }
 }
 
 main {
@@ -63,11 +379,25 @@ h1 {
   margin: 0 0 6px;
 }
 
-.page-header p {
+.page-header > p:not(.page-header-source) {
   color: var(--text-muted);
   max-width: 70ch;
   margin: 0;
   font-size: 14px;
+}
+
+.page-header-source {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.page-header-source a {
+  color: var(--text-muted);
+}
+
+.page-header-source a:hover {
+  color: var(--accent);
 }
 
 section {
@@ -135,6 +465,32 @@ section > h2:first-child {
   padding: 4px 0;
 }
 
+.measurement-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--border);
+}
+
+.measurement-swatch--wind {
+  background: var(--wind);
+}
+
+.measurement-swatch--temp {
+  background: var(--temp);
+}
+
+.measurement-swatch--pressure {
+  background: var(--pressure);
+}
+
+.field-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
 input,
 select {
   padding: 9px 10px;
@@ -195,22 +551,83 @@ button:disabled {
 }
 
 [role='status'] {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   color: var(--text-muted);
   font-weight: 500;
 }
 
-.results-empty,
-.results-idle {
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+    /* A static ring still communicates "in progress" visually without
+       motion, rather than disappearing entirely for users who've asked
+       to avoid animation. */
+    border-top-color: var(--border);
+  }
+}
+
+.results-empty {
   color: var(--text-muted);
   text-align: center;
   padding: 24px 0;
 }
 
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  padding: 56px 24px;
+}
+
+.empty-state-motif {
+  width: 200px;
+  height: 44px;
+  color: var(--border);
+  margin-bottom: 12px;
+}
+
+.empty-state-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+}
+
+.empty-state-guidance {
+  font-size: 14px;
+  color: var(--text-muted);
+  max-width: 44ch;
+  margin: 0;
+}
+
+.table-scroll {
+  overflow: auto;
+  max-height: 480px;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
-  overflow-x: auto;
-  display: block;
 }
 
 th,
@@ -226,6 +643,9 @@ tbody tr:hover {
 }
 
 th {
+  position: sticky;
+  top: 0;
+  background: var(--bg);
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 600;
@@ -246,23 +666,40 @@ h3 {
   margin: 0 0 8px;
 }
 
-.metrics-grid,
-.query-summary {
+/* KPI strip: the primary finding a reader sees after a query, so it gets
+   the largest numerals and most generous card sizing on the page. Capped
+   at 220px so five cards don't stretch edge-to-edge on a wide screen. */
+.metrics-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 220px));
   gap: 16px;
   margin: 0;
 }
 
-.metrics-grid > .metric-card,
-.query-summary > div {
+.metrics-grid > .metric-card {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
+  padding: 4px 0 4px 14px;
+  border-left: 3px solid var(--metric-color, var(--border));
 }
 
-.metrics-grid dt,
-.query-summary dt {
+/* Color is paired with the dt label text itself, never used alone: the
+   family a metric belongs to is legible from "Mean wind speed" whether
+   or not the rail color is perceived. */
+.metric-card--wind {
+  --metric-color: var(--wind);
+}
+
+.metric-card--temp {
+  --metric-color: var(--temp);
+}
+
+.metric-card--pressure {
+  --metric-color: var(--pressure);
+}
+
+.metrics-grid dt {
   font-size: 12px;
   font-weight: 600;
   color: var(--text-muted);
@@ -273,15 +710,41 @@ h3 {
 }
 
 .metrics-grid dd {
-  font-size: 26px;
+  font-size: 28px;
   font-weight: 700;
   margin: 0;
   letter-spacing: -0.01em;
 }
 
+/* Metadata strip: provenance, not a finding — smallest, most muted
+   treatment on the page, deliberately inverted from the KPI strip's
+   prominence (see redesign plan, section 4: "Key IA change"). */
+.query-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px 20px;
+  margin: 0;
+}
+
+.query-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.query-summary dt {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 0;
+}
+
 .query-summary dd {
-  font-size: 15px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text-muted);
   margin: 0;
 }
 
@@ -295,6 +758,15 @@ h3 {
   margin-bottom: 4px;
 }
 
+/* Wind analytics is the intentional visual signature of the dashboard
+   (see redesign plan): a light accent wash and a heavier accent-colored
+   top border set it apart as its own analytical zone, distinct from the
+   plain --bg every other section uses, without introducing a new hue. */
+.wind-energy-section {
+  background: var(--accent-subtle);
+  border-top: 3px solid var(--accent);
+}
+
 .wind-energy-view {
   display: flex;
   flex-direction: column;
@@ -303,7 +775,7 @@ h3 {
 
 .wind-energy-header {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 220px));
   gap: 16px;
 }
 
@@ -314,4 +786,32 @@ h3 {
   margin: 0;
   padding-top: 8px;
   border-top: 1px solid var(--border);
+}
+
+@media (min-width: 900px) {
+  .wind-energy-view {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      'header header'
+      'timeseries histogram'
+      'annotation annotation';
+    align-items: start;
+  }
+
+  .wind-energy-header {
+    grid-area: header;
+  }
+
+  .wind-energy-timeseries {
+    grid-area: timeseries;
+  }
+
+  .wind-energy-histogram {
+    grid-area: histogram;
+  }
+
+  .wind-energy-annotation {
+    grid-area: annotation;
+  }
 }

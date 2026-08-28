@@ -9,12 +9,12 @@ interface WindEnergyViewProps {
 }
 
 function formatSpeed(value: number | null): string {
-  return value === null ? '—' : `${value.toFixed(1)} m/s`
+  return value === null ? '-' : `${value.toFixed(1)} m/s`
 }
 
-// The distinctive wind-analysis feature: time series (typical + peak) +
-// mean/max summary + distribution/variability. Deliberately does not
-// print any specific turbine threshold (cut-in/rated/cut-out speed) —
+// The distinctive wind-analysis feature: time series (typical and peak),
+// mean/max summary, distribution/variability. Deliberately does not
+// print any specific turbine threshold (cut-in/rated/cut-out speed):
 // those are turbine-model-specific and not part of this API or the
 // original spec. Only real mean/max numbers derived from the response,
 // plus general explanatory text about why both matter, are shown.
@@ -44,9 +44,13 @@ export function WindEnergyView({ data }: WindEnergyViewProps) {
         </div>
       </div>
 
-      <WindTimeSeriesLine data={data} />
+      <div className="wind-energy-timeseries">
+        <WindTimeSeriesLine data={data} />
+      </div>
 
-      <WindDistributionChart data={data} />
+      <div className="wind-energy-histogram">
+        <WindDistributionChart data={data} />
+      </div>
 
       <p className="wind-energy-annotation">
         Across {summary.windSpeed.count} readings with valid wind speed, values ranged from{' '}
