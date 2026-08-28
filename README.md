@@ -27,7 +27,7 @@ This endpoint returns raw ~10-minute-interval observations recorded at
 Spain's two Antarctic bases. AEMET does not publish this dataset in real
 time; observed live, the lag between the most recent available data and
 the present has been on the order of several months (not a fixed or
-documented figure) — so a query with an end date close to today may
+documented figure), so a query with an end date close to today may
 legitimately return no data yet.
 
 ### Supported stations
@@ -70,8 +70,39 @@ orchestration layer: check cache coverage, call AEMET only on a miss,
 persist the result, then aggregate and return. It depends on its AEMET
 client through a `Protocol` (`AemetObservationSource`) rather than the
 concrete `AemetClient` class, so tests substitute a fake with no real HTTP
-client behind it — this is checked by mypy under strict mode, not just
+client behind it. This is checked by mypy under strict mode, not just
 conventionally true.
+
+### Why layered, not full Domain-Driven Design
+
+This system deliberately borrows DDD's *strategic* boundaries: a domain
+layer with no framework dependency, an application/service layer that
+orchestrates it, infrastructure (AEMET client, SQLite repository) kept at
+the edges and swappable via `Protocol` interfaces, without adopting DDD's
+*tactical* patterns: no aggregate roots, no domain events, no repositories
+returning rich entities with behavior, no CQRS.
+
+The reason is proportionality, not unfamiliarity with the fuller pattern
+set. This system has one real domain concept (a weather observation) and
+one meaningful invariant class (timezone/DST correctness, aggregation
+correctness). There is no multi-entity consistency boundary, no command
+that needs to raise a domain event for another part of the system to react
+to, nothing that changes over the object's lifecycle in a way an aggregate
+root would need to guard. `ObservationRecord` is a data shape with pure
+functions applied to it, not an entity with encapsulated state transitions,
+so making it one would add ceremony (a constructor guarding invariants
+that don't exist, methods that just set a field) without making anything
+safer or easier to test than the current pure-function/dataclass approach
+already is.
+
+The concrete benefit taken from DDD without the tactical overhead: strict
+layering makes it possible to unit-test timezone conversion and
+aggregation, the two places where a subtle bug would be hardest to
+notice, with no FastAPI app, no SQLite engine, and no AEMET client in the
+picture at all (`backend/tests/unit/test_domain_time.py`,
+`test_domain_aggregation.py`). That testability is what the architecture
+is actually optimizing for; tactical DDD patterns were left out because
+they would cost real complexity here without buying more of it.
 
 ## Technology Stack
 
@@ -81,7 +112,7 @@ SQLAlchemy 2.x, SQLite, httpx, pytest, mypy (strict mode), ruff.
 `httpx2` (Pydantic's actively maintained continuation of `httpx`, since
 Starlette's `TestClient` deprecated the original) is a dev-only dependency
 used solely by the test client. The AEMET integration itself uses `httpx`,
-per the project's chosen HTTP client — see Assumptions below.
+per the project's chosen HTTP client, see Assumptions below.
 
 **Frontend:** React 19, TypeScript (strict mode, `noUncheckedIndexedAccess`),
 Vite, Recharts, Vitest, React Testing Library, ESLint with
@@ -161,7 +192,7 @@ pip install -e ".[dev]"
 ### Environment Variables
 
 Copy `.env.example` to `.env` at the project root and fill in your AEMET
-API key. Never commit `.env` — it is already covered by `.gitignore`.
+API key. Never commit `.env`, it is already covered by `.gitignore`.
 
 An AEMET OpenData API key is free and self-service:
 `https://opendata.aemet.es/centrodedescargas/altaUsuario`.
@@ -205,15 +236,15 @@ complete).
 - **Timezone input formats.** Two forms are accepted: an IANA name
   (`Europe/Berlin`), which carries a DST rule and varies by calendar date,
   or a fixed UTC offset (`+02:00`, `-05:30`), which carries no DST logic
-  at all — it is that many hours from UTC on every date supplied. A
+  at all; it is that many hours from UTC on every date supplied. A
   caller using the offset form is opting out of DST reasoning explicitly;
   the two are not interchangeable representations of the same thing.
-- **Browser timezone convenience default.** The frontend will pre-fill the
-  timezone field using the browser's local timezone
-  (`Intl.DateTimeFormat().resolvedOptions().timeZone`) as an editable
-  starting value. This is a client-side convenience only — no IP-based
-  geolocation or server-side location tracking is performed anywhere in
-  this system.
+- **Timezone selector.** The frontend offers a dropdown of common
+  timezones, defaulting to `Europe/Madrid` (the backend's own default),
+  plus an "Other" option that reveals a free-text field so any IANA name
+  or fixed offset the backend accepts remains reachable, not just the
+  curated list. No IP-based geolocation or server-side location tracking
+  is performed anywhere in this system.
 - **Data quality filtering.** AEMET flags each observation with `qdato`
   (0 = good, 1 = bad quality), a field discovered during live API
   verification rather than specified in the original requirements. A
@@ -233,7 +264,7 @@ complete).
 `backend/app/domain/time.py` isolates all timezone conversion from the
 AEMET client, persistence, and API layers. It distinguishes:
 
-- a **naive wall-clock value** (what a user types — meaningless without a
+- a **naive wall-clock value** (what a user types, meaningless without a
   timezone),
 - a **named timezone** (`zoneinfo.ZoneInfo`, an IANA DST rule set, not a
   fixed offset),
@@ -244,11 +275,11 @@ Two DST hazards are handled explicitly rather than left to Python's
 defaults:
 
 - **Nonexistent local times** (the hour skipped during a spring-forward
-  transition — e.g. `2026-03-29T02:30:00` never occurs in Europe/Madrid)
+  transition, e.g. `2026-03-29T02:30:00` never occurs in Europe/Madrid)
   raise `NonexistentLocalTimeError` rather than silently resolving to
   whatever offset Python's `fold` default happens to produce.
 - **Ambiguous local times** (the hour repeated during a fall-back
-  transition — e.g. `2026-10-25T02:30:00` occurs twice, at `+02:00` and
+  transition, e.g. `2026-10-25T02:30:00` occurs twice, at `+02:00` and
   again at `+01:00`) resolve deterministically to the first (pre-
   transition) occurrence, as a documented convention rather than an
   implicit default.
@@ -263,7 +294,7 @@ by tests anchored to those exact dates.
 buckets using their **Europe/Madrid** local representation, not their raw
 UTC timestamp. A daily or monthly boundary drawn in UTC would split
 observations that belong to the same Madrid calendar day whenever Madrid's
-UTC offset is nonzero — which is always, since Madrid is never UTC+0. This
+UTC offset is nonzero, which is always, since Madrid is never UTC+0. This
 is tested directly: two observations 1 hour apart in UTC, straddling
 midnight Madrid time, land in different daily buckets; the same test
 repeated across the March 2026 DST transition confirms the bucket key is
@@ -278,7 +309,7 @@ x̄ = (1/n) · Σ xᵢ,  i = 1..n
 
 The mean is a reasonable summary of a continuous physical quantity
 (temperature, pressure, wind speed) sampled at roughly regular ~10-minute
-intervals — it is the standard estimator of a signal's typical value over
+intervals: it is the standard estimator of a signal's typical value over
 an interval. It is explicitly **not** a complete summary on its own:
 averaging wind speed discards gust information (a bucket with one strong
 gust and mostly calm air can share a mean with a bucket of steady moderate
@@ -293,7 +324,7 @@ the mean only, since the same operational-threshold reasoning does not
 apply to them here. Wind direction is still not modeled at all, since it
 falls outside the specification's three required measurements. A bucket
 where every reading is missing or quality-flagged reports `null` for that
-measurement, not `0.0` — zero would be a real, incorrect physical value,
+measurement, not `0.0`. Zero would be a real, incorrect physical value,
 whereas `null` correctly means "no valid data."
 
 Grouping and reduction are both O(n) in the number of raw observations,
@@ -302,7 +333,7 @@ bounded date range at ~10-minute granularity (at most a few thousand
 points).
 
 Buckets are only produced for calendar periods that contain at least one
-raw observation — a gap in AEMET's data (a missing hour, or a station
+raw observation. A gap in AEMET's data (a missing hour, or a station
 outage) produces no row for that period, rather than a null-filled
 placeholder row. This keeps the aggregation function's contract simple
 (it only needs the observations, not the originally requested range) and
@@ -314,7 +345,7 @@ this data should not assume a continuous, gap-free time axis.
 Two SQLite tables (`backend/app/db/models.py`), each with a purpose
 derived from what actually needs to be tracked:
 
-**`observations`** — the identity of a meteorological observation is
+**`observations`**: the identity of a meteorological observation is
 `(station, observed_at)`: the same station measuring at the same instant
 is the same observation by definition. This is enforced as a real database
 constraint (`UNIQUE(station, observed_at)`), not just an application-level
@@ -323,7 +354,7 @@ error rather than silently duplicating rows. The same composite also
 serves as the lookup index, since every real query is "observations for
 station X between times A and B."
 
-**`fetched_ranges`** — records that AEMET was queried for a given
+**`fetched_ranges`**: records that AEMET was queried for a given
 `(station, range)`, independent of whether that query returned any
 observations. This is necessary because AEMET publishes this dataset with
 a real lag behind the present: a recent date range legitimately has zero
@@ -334,7 +365,7 @@ the cache to re-query AEMET on every request for that range.
 **Cache hit logic**, following interval reasoning: for a requested range
 *R* on a given station, the cache is checked against previously fetched
 ranges *C*. The current implementation checks whether *R* is fully
-contained within a single prior fetched range — not a general union of
+contained within a single prior fetched range, not a general union of
 multiple overlapping fetched ranges (*R \\ C* as a true set difference
 across many stored intervals). A request spanning two previously fetched
 but non-adjacent ranges is treated as a miss and the full range is
@@ -365,13 +396,13 @@ crashes:
 
 - SQLite's `DATETIME` column has no timezone concept, so SQLAlchemy
   silently returns naive `datetime` objects on read even when an
-  aware value was written — a round-trip test caught this
+  aware value was written. A round-trip test caught this
   (`observed_at` came back missing `tzinfo`). `UTCDateTime`, a small
   `TypeDecorator`, re-attaches UTC on load; every datetime this
   application persists is UTC by construction, so this is a correctness
   fix, not an assumption of convenience.
 - `Session.merge()` upserts on the ORM primary key, not on any other
-  unique constraint — an idempotency test caught that re-fetching an
+  unique constraint. An idempotency test caught that re-fetching an
   overlapping range raised `IntegrityError` instead of updating the
   existing row, because every freshly constructed `ObservationRecord` has
   no primary key set and so was always treated as an insert. The fix uses
@@ -388,28 +419,29 @@ database if query volume ever justified it.
 ## AEMET Integration Notes
 
 - The client performs at most one retry for connection/timeout failures
-  and 5xx responses, with a short fixed delay (not exponential backoff —
+  and 5xx responses, with a short fixed delay (not exponential backoff:
   this is a single-user local application, not a system under concurrent
   load). Other 4xx responses are never retried: retrying a client error
   would fail identically.
-- A 429 (rate limit) is retried exactly once, after a longer cooldown
-  than the baseline request spacing, rather than failing the request
-  outright. This matters specifically because `WeatherService` splits any
-  range over ~31 days into several sequential AEMET calls (see below): a
-  single 429 partway through a multi-chunk fetch previously aborted the
-  whole request and discarded every chunk already fetched, surfacing a
-  perfectly satisfiable query as a hard failure. A persistent 429 (i.e.
-  still rate-limited after the retry) still raises `AemetUnavailableError`
-  rather than retrying indefinitely.
+- A 429 (rate limit) is retried up to three times, with the cooldown
+  doubling after each consecutive 429 (5s, 10s, 20s by default), rather
+  than failing the request outright. This matters specifically because
+  `WeatherService` splits any range over ~31 days into several sequential
+  AEMET calls (see below): a wide query can issue dozens of requests in a
+  row, and confirmed live, sustained sequential traffic can trip AEMET's
+  limiter more than once in a row, not just transiently: a single retry
+  was not enough in practice. A persistent 429 (i.e. still rate-limited
+  after all retries) still raises `AemetUnavailableError` rather than
+  retrying indefinitely.
 - 401/403 (bad or missing API key) raises `AemetAuthenticationError`, kept
   distinct from `AemetUnavailableError`, since a rejected key is a
-  configuration problem, not a transient outage — conflating the two would
+  configuration problem, not a transient outage: conflating the two would
   make "should I retry?" logic upstream give the wrong answer.
 - AEMET's 404 for an empty date range is treated as a successful empty
   result (`[]`), not an exception, consistent with the publication lag
   noted above.
 - The `datos` URL returned in step one is a pre-signed link and does not
-  take the `api_key` header — verified against the live API, not assumed.
+  take the `api_key` header, verified against the live API, not assumed.
 - AEMET signals "no data for this range" in two different ways, both
   discovered by live testing rather than documentation: a genuine HTTP
   404, and an HTTP 200 whose body carries `estado: 404` with no
@@ -424,7 +456,7 @@ database if query volume ever justified it.
   distinguished by the response text (`AemetRangeTooLongError` vs. a
   legitimate empty list), and `WeatherService` proactively splits any
   requested range into ≤31-day chunks before ever calling AEMET, checking
-  the cache per chunk rather than for the whole range — so a later
+  the cache per chunk rather than for the whole range, so a later
   request overlapping only part of a previously-fetched year still
   benefits from a partial cache hit instead of forcing a full re-fetch.
 
@@ -470,13 +502,27 @@ timezone name) return `400` with a message describing the problem.
 Failures in FastAPI's own request-shape validation (a missing required
 parameter, for instance) return `422`, distinct from this application's
 own domain validation. Upstream/persistence failures return `502` or
-`500` — see Error Handling below.
+`500`, see Error Handling below.
+
+### `GET /observations/latest-available`
+
+Query params: `station` (required, same values as above). Returns
+`{"latest_available_date": "YYYY-MM-DD" | null}`, the most recent date
+AEMET is confirmed to have data for, driving the frontend's date-picker
+cap. Answered cache-first: `MAX(observed_at)` already in the local SQLite
+cache (free and instant, and since the cache is populated entirely by
+successful AEMET fetches, it is already the most authoritative record this
+app has of "what data have we actually confirmed exists"). A live AEMET
+probe (stepping back through 60-day windows, bounded to 6 attempts) only
+runs as a cold-start fallback when nothing is cached yet for that
+station. The endpoint's own answer is cached in-process for 1 hour per
+station, since the true value changes at most roughly monthly and this
+endpoint may be called on every page load.
 
 ### `GET /health`
 
-Returns `{"status": "ok"}`. Used by Docker's healthcheck and as a smoke
-test that the app booted (settings loaded, database schema created)
-without requiring a real AEMET call.
+Returns `{"status": "ok"}`. A smoke test that the app booted (settings
+loaded, database schema created) without requiring a real AEMET call.
 
 ### Error Handling
 
@@ -490,7 +536,7 @@ rather than scattering `try`/`except` across routes:
 | `AemetAuthenticationError` | 500 | Server misconfiguration (bad AEMET key), not the caller's fault |
 | `AemetError` (other subclasses) | 502 | This service is a proxy to AEMET; an upstream failure is a bad-gateway condition |
 | `PersistenceError` | 500 | Local database failure |
-| Anything else | 500 | Unexpected — logged in full server-side |
+| Anything else | 500 | Unexpected, logged in full server-side |
 
 For any `5xx` response, the response body is a generic message; the real
 exception detail (which may name an internal table, config variable, or
@@ -500,7 +546,7 @@ upstream URL) is logged server-side only, never returned to the caller.
 
 The `httpx.AsyncClient` used for AEMET requests and the SQLite engine are
 both constructed once, in a FastAPI `lifespan` context manager, and
-reused across every request via `app.state` — not rebuilt per request.
+reused across every request via `app.state`, not rebuilt per request.
 Rebuilding the HTTP client per request would mean paying a new TCP+TLS
 handshake to AEMET on every call instead of reusing a pooled connection,
 which is the concrete mechanism behind "connection reuse" as a resilience
@@ -509,30 +555,78 @@ property, not just a phrase.
 ## Frontend
 
 React 19 + TypeScript (Vite), in `frontend/`. A single query form
-(`QueryForm`) captures every backend parameter — station, start/end
-datetime, timezone, aggregation, measurement selection — and submits to
-`GET /observations` through a typed API client (`api/client.ts`). Results
-render as both a table (`ObservationsTable`) and a dual-axis line chart
-(`ObservationsChart`, using Recharts): pressure gets its own Y-axis, since
-its magnitude (~950-1050 hPa) shares no meaningful scale with temperature
-or wind speed, and lines do not connect across `null` values, since a gap
-in the data (a bucket with no valid readings, or a measurement not
-requested) is a real absence, not an interpolation opportunity.
+(`QueryForm`) captures every backend parameter: station, start/end
+datetime, timezone, aggregation, measurement selection, and submits to
+`GET /observations` through a typed API client (`api/client.ts`). Both
+date fields are capped at the most recent date AEMET is confirmed to have
+data for (`GET /observations/latest-available`, cache-first with a
+live-probe fallback, see the backend endpoint docs above), with a caption
+stating the date, so a query that's doomed to return nothing is caught
+before submission rather than after. The timezone field is a dropdown of
+common zones defaulting to `Europe/Madrid` (the backend's own default),
+with an "Other" option that reveals a free-text field so any IANA name or
+fixed UTC offset the backend accepts stays reachable, not just the
+curated list.
+
+Before any query, the page shows a full-bleed polar-themed hero (`Hero`):
+a headline and call to action beside an abstract, entirely vector
+illustration of the Antarctic coastline with the two stations marked,
+followed by three short cards explaining what each measurement offers and
+a compact diagram of the data pipeline (`IntroFeatures`), rather than a
+blank box:
+
+![Empty state](docs/screenshots/empty-state.png)
+
+Once a query is submitted, the full hero and intro cards are replaced by
+a compact header (`CompactHeader`) carrying the same identity in a slim
+strip, so the page never goes headless while the analytical workspace
+takes over. A successful query renders, in order of analytical weight: a
+KPI strip (`SummaryMetrics`: mean/max wind speed, mean temperature, mean
+pressure, observation count, each with its rationale in a `title`
+tooltip and a color-coded left rail matching its measurement family),
+then the main time series, then a visually distinct wind-energy analysis
+section, then a compact query-metadata strip, then the full table:
+
+![Key statistics and time series](docs/screenshots/results-kpi-wind.png)
+
+Every measurement has one consistent color identity across the whole
+frontend: wind speed in cyan/teal, temperature in warm orange-red,
+pressure in indigo/violet, applied to chart lines, KPI card rails,
+measurement-checkbox swatches, and legends alike. Color is never the only
+signal; every colored element also carries a text label.
+
+The time series (`ObservationsChart`) is three vertically-stacked,
+single-axis panels: temperature, wind speed (mean and max), pressure,
+synced via Recharts' `syncId` so hovering any one shows a shared
+crosshair across all three. This replaced an earlier dual-axis design:
+plotting unrelated units (°C, m/s, hPa) against two shared axes made it
+look as though their line shapes were comparable, which was an artifact
+of arbitrary axis scaling, not a real relationship in the data. Lines do
+not connect across `null` values, since a gap (a bucket with no valid
+readings, or a measurement not requested) is a real absence, not an
+interpolation opportunity.
+
+The wind-energy section (`WindEnergyView`) is the frontend's analytical
+signature, tied directly to feedback from the assigning team that turbine
+operation depends on minimum, maximum, and optimal wind-speed thresholds,
+not the mean alone: a mean/max summary, a reused wind time series, and a
+histogram of the wind-speed distribution (bucketed client-side from the
+same response data). A single mean can conceal whether conditions are
+consistently moderate or swing between calm and extreme, which matters
+directly for feasibility. The section deliberately never prints a
+specific turbine threshold (cut-in/rated/cut-out speed); those are
+turbine-model-specific and not part of this API or the challenge. A
+regression test asserts that text never appears.
+
+![Wind energy analysis, query metadata, and table](docs/screenshots/results-timeseries-table.png)
 
 Application state is one discriminated union
 (`{status: 'idle' | 'loading' | 'success' | 'error', ...}`) rather than
 several independent booleans, so invalid combinations (loading and error
 simultaneously, for instance) are unrepresentable rather than merely
-avoided by convention. Every state the challenge specifies — initial,
-loading, success, empty, validation, and API error — is handled
+avoided by convention. Every state the challenge specifies (initial,
+loading, success, empty, validation, and API error) is handled
 explicitly in `App.tsx`.
-
-The timezone field is pre-filled with the browser's own timezone
-(`Intl.DateTimeFormat().resolvedOptions().timeZone`) as an editable
-starting value. This is a client-side convenience only, not geolocation:
-no IP lookup or server-side location tracking occurs anywhere in this
-system, and the field remains fully editable, including to a fixed UTC
-offset per the backend's own supported input formats.
 
 ## Testing
 
@@ -544,7 +638,7 @@ HTTP only) across every validation and behavioral case in the
 specification. Run with `pytest` from `backend/`.
 
 **Frontend** (`frontend/src/**/*.test.tsx`, Vitest + React Testing
-Library): behavioral tests from the user's perspective — form validation
+Library): behavioral tests from the user's perspective, form validation
 (required fields, start-before-end), successful submission, loading
 state, API error state, empty state, table rendering (including the
 `null`-vs-real-zero distinction), and interactions changing the
@@ -556,6 +650,30 @@ from `frontend/`.
 
 Both suites mock every external call (AEMET, the backend API) and never
 depend on network access or a running counterpart service to pass.
+
+## Continuous Integration
+
+Two GitHub Actions workflows (`.github/workflows/backend.yml`,
+`frontend.yml`) run automatically on every push and pull request touching
+their respective directory, scoped by a `paths` filter so a frontend-only
+change doesn't trigger the backend job and vice versa. Backend: `ruff
+check`, `mypy` (strict), then `pytest`. Frontend: `npm ci`, `eslint`,
+`vitest run`, then `npm run build` (which itself runs `tsc -b`, covering
+the type check without a separate step). Neither workflow currently gates
+merges via branch protection; that's tracked as the next step in the
+technical report's Future Improvements section.
+
+These workflows were added late in development, not from the first
+commit. This is stated plainly rather than left for a reviewer to notice
+from the commit history: what existed from early on was the same checks
+run manually and consistently, every backend change verified against
+`pytest`, `mypy`, and `ruff`, every frontend change against `vitest`,
+`tsc`, and `eslint`, before being considered complete, which is why the
+test and type-check results referenced throughout this README and the
+technical report were never contingent on CI existing. Automating that
+existing discipline into a pipeline that runs on every push, rather than
+only when the developer remembers to run it, was a later, deliberate
+addition, not a foundation the rest of the project's quality depended on.
 
 ## Trade-offs
 
@@ -572,9 +690,6 @@ depend on network access or a running counterpart service to pass.
 
 ## Assumptions Requiring Future Verification
 
-- The exact behavior of AEMET's 429 (rate limit) response under sustained
-  load has not been empirically tested, only confirmed as a documented
-  status code in the OpenAPI specification.
 - Field availability differs between station types (confirmed: Juan Carlos
   I's live response included `radKjM2`, `rec`, `tsb`, and `altNieve` fields
   that Gabriel de Castilla's did not). The AEMET response mapping treats
