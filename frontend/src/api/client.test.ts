@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, getObservations } from './client'
+import { ApiError, getLatestAvailableDate, getObservations } from './client'
 import type { ObservationQuery } from '../types/api'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -164,5 +164,69 @@ describe('getObservations', () => {
     await expect(getObservations(baseQuery)).rejects.toThrow(
       'Malformed observation: missing observation_count',
     )
+  })
+})
+
+describe('getLatestAvailableDate', () => {
+  let fetchMock: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('requests the correct endpoint with the station as a query param', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ latest_available_date: '2026-03-15' }))
+
+    await getLatestAvailableDate('gabriel_de_castilla')
+
+    const calledUrl = fetchMock.mock.calls[0]?.[0] as string
+    const url = new URL(calledUrl)
+    expect(url.pathname).toBe('/observations/latest-available')
+    expect(url.searchParams.get('station')).toBe('gabriel_de_castilla')
+  })
+
+  it('returns the date string on success', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ latest_available_date: '2026-03-15' }))
+
+    const result = await getLatestAvailableDate('gabriel_de_castilla')
+
+    expect(result).toBe('2026-03-15')
+  })
+
+  it('returns null when the backend reports no known date', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ latest_available_date: null }))
+
+    const result = await getLatestAvailableDate('gabriel_de_castilla')
+
+    expect(result).toBeNull()
+  })
+
+  it('returns null (fails open) on a non-2xx response, without throwing', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ detail: 'boom' }, 500))
+
+    const result = await getLatestAvailableDate('gabriel_de_castilla')
+
+    expect(result).toBeNull()
+  })
+
+  it('returns null (fails open) on a network failure, without throwing', async () => {
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
+
+    const result = await getLatestAvailableDate('gabriel_de_castilla')
+
+    expect(result).toBeNull()
+  })
+
+  it('returns null (fails open) on a malformed response body', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ unexpected: 'shape' }))
+
+    const result = await getLatestAvailableDate('gabriel_de_castilla')
+
+    expect(result).toBeNull()
   })
 })

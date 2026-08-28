@@ -42,8 +42,12 @@ describe('ObservationsTable', () => {
 
     const row = screen.getByText('2024-01-15T01:00:00+01:00').closest('tr')
     // Three null fields -> three placeholder cells, distinguishing "not
-    // requested / no valid data" from a real zero value.
-    expect(row?.textContent.match(/—/g)).toHaveLength(3)
+    // requested / no valid data" from a real zero value. Checked via the
+    // cells themselves, not a regex over the whole row's text, since the
+    // datetime cell also contains hyphens.
+    const cells = row ? Array.from(row.querySelectorAll('td')) : []
+    const placeholderCells = cells.filter((cell) => cell.textContent === '-')
+    expect(placeholderCells).toHaveLength(3)
   })
 
   it('renders multiple rows in the order given', () => {

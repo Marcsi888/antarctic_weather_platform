@@ -83,6 +83,6 @@ describe('QuerySummary', () => {
   it('shows a placeholder returned period when data is empty', () => {
     render(<QuerySummary query={baseQuery} data={[]} />)
     const returnedPeriodRow = screen.getByText('Returned period').closest('div')
-    expect(returnedPeriodRow).toHaveTextContent('—')
+    expect(returnedPeriodRow).toHaveTextContent('-')
   })
 })

@@ -39,10 +39,29 @@ afterEach(() => {
 })
 
 describe('App', () => {
-  it('shows the idle state before any query is submitted', () => {
+  it('shows the idle state (hero and intro features) before any query is submitted', () => {
     render(<App />)
 
-    expect(screen.getByText('Submit a query to see observations.')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /reading the wind/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Wind Speed' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Temperature' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Atmospheric Pressure' })).toBeInTheDocument()
+  })
+
+  it('full hero and intro features are replaced by the compact header once a query is submitted', async () => {
+    getObservationsMock.mockResolvedValue([sampleObservation])
+    render(<App />)
+    const user = await fillValidDateRange()
+
+    await user.click(screen.getByRole('button', { name: 'Query' }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('heading', { name: /reading the wind/i })).not.toBeInTheDocument()
+    })
+    expect(screen.queryByText('Wind Speed')).not.toBeInTheDocument()
+    // The compact header keeps the same identity on screen rather than
+    // leaving the page without any header at all.
+    expect(screen.getByRole('heading', { name: 'Antarctic Weather Platform' })).toBeInTheDocument()
   })
 
   it('rejects submission when start is not before end, without calling the API', async () => {
@@ -51,7 +70,7 @@ describe('App', () => {
 
     await user.type(screen.getByLabelText('Start'), '2024-01-15T10:00:00')
     await user.type(screen.getByLabelText('End'), '2024-01-15T09:00:00')
-    await user.click(screen.getByRole('button', { name: /query/i }))
+    await user.click(screen.getByRole('button', { name: 'Query' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Start must be before end.')
     expect(getObservationsMock).not.toHaveBeenCalled()
@@ -69,7 +88,7 @@ describe('App', () => {
     render(<App />)
     const user = await fillValidDateRange()
 
-    await user.click(screen.getByRole('button', { name: /query/i }))
+    await user.click(screen.getByRole('button', { name: 'Query' }))
 
     expect(await screen.findByRole('status')).toHaveTextContent('Loading observations…')
     expect(screen.getByRole('button', { name: /loading/i })).toBeDisabled()
@@ -85,7 +104,7 @@ describe('App', () => {
     render(<App />)
     const user = await fillValidDateRange()
 
-    await user.click(screen.getByRole('button', { name: /query/i }))
+    await user.click(screen.getByRole('button', { name: 'Query' }))
 
     expect(await screen.findByText('2024-01-15T01:00:00+01:00')).toBeInTheDocument()
     expect(getObservationsMock).toHaveBeenCalledOnce()
@@ -98,7 +117,7 @@ describe('App', () => {
     expect(screen.queryByRole('region', { name: 'Summary metrics' })).not.toBeInTheDocument()
 
     const user = await fillValidDateRange()
-    await user.click(screen.getByRole('button', { name: /query/i }))
+    await user.click(screen.getByRole('button', { name: 'Query' }))
 
     expect(await screen.findByRole('region', { name: 'Summary metrics' })).toHaveTextContent(
       'Mean wind speed',
@@ -112,7 +131,7 @@ describe('App', () => {
     expect(screen.queryByText('Wind energy analysis')).not.toBeInTheDocument()
 
     const user = await fillValidDateRange()
-    await user.click(screen.getByRole('button', { name: /query/i }))
+    await user.click(screen.getByRole('button', { name: 'Query' }))
 
     expect(await screen.findByText('Wind energy analysis')).toBeInTheDocument()
   })
@@ -124,7 +143,7 @@ describe('App', () => {
 
     await user.selectOptions(screen.getByLabelText('Station'), 'juan_carlos_i')
     await user.selectOptions(screen.getByLabelText('Aggregation'), 'daily')
-    await user.click(screen.getByRole('button', { name: /query/i }))
+    await user.click(screen.getByRole('button', { name: 'Query' }))
 
     const summarySection = await screen.findByRole('region', { name: 'Query summary' })
     expect(summarySection).toHaveTextContent('Juan Carlos I')
@@ -136,7 +155,7 @@ describe('App', () => {
     render(<App />)
     const user = await fillValidDateRange()
 
-    await user.click(screen.getByRole('button', { name: /query/i }))
+    await user.click(screen.getByRole('button', { name: 'Query' }))
 
     expect(await screen.findByText(/no observations for this query/i)).toBeInTheDocument()
   })
@@ -146,7 +165,7 @@ describe('App', () => {
     render(<App />)
     const user = await fillValidDateRange()
 
-    await user.click(screen.getByRole('button', { name: /query/i }))
+    await user.click(screen.getByRole('button', { name: 'Query' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       "Request failed: Unknown station identifier: 'x'",
@@ -159,7 +178,7 @@ describe('App', () => {
     const user = await fillValidDateRange()
 
     await user.selectOptions(screen.getByLabelText('Aggregation'), 'daily')
-    await user.click(screen.getByRole('button', { name: /query/i }))
+    await user.click(screen.getByRole('button', { name: 'Query' }))
 
     await waitFor(() => {
       expect(getObservationsMock).toHaveBeenCalledWith(
@@ -174,7 +193,7 @@ describe('App', () => {
     const user = await fillValidDateRange()
 
     await user.click(screen.getByLabelText('Temperature'))
-    await user.click(screen.getByRole('button', { name: /query/i }))
+    await user.click(screen.getByRole('button', { name: 'Query' }))
 
     await waitFor(() => {
       expect(getObservationsMock).toHaveBeenCalledWith(
@@ -189,7 +208,7 @@ describe('App', () => {
     const user = await fillValidDateRange()
 
     await user.selectOptions(screen.getByLabelText('Station'), 'juan_carlos_i')
-    await user.click(screen.getByRole('button', { name: /query/i }))
+    await user.click(screen.getByRole('button', { name: 'Query' }))
 
     await waitFor(() => {
       expect(getObservationsMock).toHaveBeenCalledWith(

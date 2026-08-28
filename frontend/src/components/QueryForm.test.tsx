@@ -1,10 +1,32 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { QueryForm } from './QueryForm'
 
+vi.mock('../api/client', async () => {
+  const actual = await vi.importActual<typeof import('../api/client')>('../api/client')
+  return {
+    ...actual,
+    getLatestAvailableDate: vi.fn(),
+  }
+})
+
+const { getLatestAvailableDate } = await import('../api/client')
+const getLatestAvailableDateMock = vi.mocked(getLatestAvailableDate)
+
+beforeEach(() => {
+  // Default: no restriction applied, matching most tests' concerns (they
+  // aren't testing the date-cap feature itself). Individual tests below
+  // override this to exercise the cap behavior specifically.
+  getLatestAvailableDateMock.mockResolvedValue(null)
+})
+
+afterEach(() => {
+  getLatestAvailableDateMock.mockReset()
+})
+
 // A datetime-local input's .value omits seconds whenever they're :00,
-// regardless of step="1" — confirmed both in jsdom (here) and in a real
+// regardless of step="1": confirmed both in jsdom (here) and in a real
 // Chromium browser (manual check during development), so this is a real
 // cross-environment behavior, not a jsdom-only quirk. The backend
 // requires the full HH:MM:SS format and rejects a shortened value, so
@@ -75,17 +97,48 @@ describe('QueryForm', () => {
     expect(onSubmit).not.toHaveBeenCalled()
   })
 
-  it('omits timezone from the submitted query when the field is cleared', async () => {
+  it('defaults the timezone selection to Europe/Madrid', async () => {
     const onSubmit = vi.fn()
     const user = userEvent.setup()
     render(<QueryForm onSubmit={onSubmit} disabled={false} />)
 
-    await user.clear(screen.getByLabelText(/Timezone/))
+    expect(screen.getByLabelText('Timezone')).toHaveValue('Europe/Madrid')
+
     await user.type(screen.getByLabelText('Start'), '2024-01-15T00:00:00')
     await user.type(screen.getByLabelText('End'), '2024-01-15T06:00:00')
     await user.click(screen.getByRole('button', { name: /query/i }))
 
-    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ timezone: undefined }))
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ timezone: 'Europe/Madrid' }))
+  })
+
+  it('submits a different timezone selected from the dropdown', async () => {
+    const onSubmit = vi.fn()
+    const user = userEvent.setup()
+    render(<QueryForm onSubmit={onSubmit} disabled={false} />)
+
+    await user.selectOptions(screen.getByLabelText('Timezone'), 'UTC')
+    await user.type(screen.getByLabelText('Start'), '2024-01-15T00:00:00')
+    await user.type(screen.getByLabelText('End'), '2024-01-15T06:00:00')
+    await user.click(screen.getByRole('button', { name: /query/i }))
+
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ timezone: 'UTC' }))
+  })
+
+  it('reveals a free-text field when "Other" is selected and submits its value', async () => {
+    const onSubmit = vi.fn()
+    const user = userEvent.setup()
+    render(<QueryForm onSubmit={onSubmit} disabled={false} />)
+
+    expect(screen.queryByLabelText('Custom timezone')).not.toBeInTheDocument()
+
+    await user.selectOptions(screen.getByLabelText('Timezone'), 'Other (enter manually)')
+    const customField = screen.getByLabelText('Custom timezone')
+    await user.type(customField, '+05:30')
+    await user.type(screen.getByLabelText('Start'), '2024-01-15T00:00:00')
+    await user.type(screen.getByLabelText('End'), '2024-01-15T06:00:00')
+    await user.click(screen.getByRole('button', { name: /query/i }))
+
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ timezone: '+05:30' }))
   })
 
   it('sends an empty measurements array when none are checked', async () => {
@@ -189,5 +242,78 @@ describe('QueryForm', () => {
     expect(screen.getByLabelText('Start')).toBeDisabled()
     expect(screen.getByLabelText('End')).toBeDisabled()
     expect(screen.getByRole('button', { name: /loading/i })).toBeDisabled()
+  })
+
+  it('applies the latest available date as the max on both Start and End fields', async () => {
+    getLatestAvailableDateMock.mockResolvedValue('2026-03-15')
+    render(<QueryForm onSubmit={vi.fn()} disabled={false} />)
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Start')).toHaveAttribute('max', '2026-03-15T23:59:59')
+    })
+    expect(screen.getByLabelText('End')).toHaveAttribute('max', '2026-03-15T23:59:59')
+  })
+
+  it('shows a caption under both Start and End stating the latest available date', async () => {
+    getLatestAvailableDateMock.mockResolvedValue('2026-03-15')
+    render(<QueryForm onSubmit={vi.fn()} disabled={false} />)
+
+    const captions = await screen.findAllByText('Data available through 2026-03-15')
+    expect(captions).toHaveLength(2)
+  })
+
+  it('shows no caption before the date has loaded or when none is available', async () => {
+    getLatestAvailableDateMock.mockResolvedValue(null)
+    render(<QueryForm onSubmit={vi.fn()} disabled={false} />)
+
+    await waitFor(() => {
+      expect(getLatestAvailableDateMock).toHaveBeenCalled()
+    })
+    expect(screen.queryByText(/data available through/i)).not.toBeInTheDocument()
+  })
+
+  it('leaves Start and End unrestricted when no date is available', async () => {
+    getLatestAvailableDateMock.mockResolvedValue(null)
+    render(<QueryForm onSubmit={vi.fn()} disabled={false} />)
+
+    await waitFor(() => {
+      expect(getLatestAvailableDateMock).toHaveBeenCalled()
+    })
+    expect(screen.getByLabelText('Start')).not.toHaveAttribute('max')
+    expect(screen.getByLabelText('End')).not.toHaveAttribute('max')
+  })
+
+  it('does not restrict the form if the underlying fetch rejects', async () => {
+    getLatestAvailableDateMock.mockRejectedValue(new Error('network down'))
+    render(<QueryForm onSubmit={vi.fn()} disabled={false} />)
+
+    // Give the rejected promise a tick to settle; a real assertion
+    // failure here would be an unhandled rejection crashing the test,
+    // not a passing "unrestricted" check.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(screen.getByLabelText('Start')).not.toHaveAttribute('max')
+    expect(screen.getByLabelText('End')).not.toHaveAttribute('max')
+  })
+
+  it('re-fetches the latest available date when the station changes', async () => {
+    getLatestAvailableDateMock.mockResolvedValue('2026-03-15')
+    const user = userEvent.setup()
+    render(<QueryForm onSubmit={vi.fn()} disabled={false} />)
+
+    await waitFor(() => {
+      expect(getLatestAvailableDateMock).toHaveBeenCalledWith('gabriel_de_castilla')
+    })
+
+    getLatestAvailableDateMock.mockResolvedValue('2026-02-01')
+    await user.selectOptions(screen.getByLabelText('Station'), 'juan_carlos_i')
+
+    await waitFor(() => {
+      expect(getLatestAvailableDateMock).toHaveBeenCalledWith('juan_carlos_i')
+    })
+    await waitFor(() => {
+      expect(screen.getByLabelText('Start')).toHaveAttribute('max', '2026-02-01T23:59:59')
+    })
+    expect(screen.getByLabelText('End')).toHaveAttribute('max', '2026-02-01T23:59:59')
   })
 })
