@@ -3,9 +3,16 @@
 Full-stack application for retrieving, caching, aggregating, and visualizing
 historical Antarctic meteorological observations from AEMET OpenData.
 
-**Status:** in active development. This README reflects what is actually
+**Status:** implementation-complete. This README reflects what is actually
 implemented as of each commit; sections for work not yet started are
 omitted rather than stubbed out.
+
+**Technical report:** [`docs/report/report.pdf`](docs/report/report.pdf)
+covers the reasoning behind every non-trivial decision in this system
+(AEMET integration findings, timezone/DST handling, aggregation strategy,
+caching design, testing strategy, CI, security, and trade-offs), each
+claim referenced against the actual source file and line range. This
+README covers setup and usage; the report covers *why*.
 
 ## Business Context
 
@@ -209,6 +216,20 @@ An AEMET OpenData API key is free and self-service:
 Configuration is validated at startup (`backend/app/core/config.py`): a
 missing or invalid required value fails immediately with a clear error
 rather than surfacing later inside a request.
+
+### Running the backend
+
+```bash
+cd backend
+uvicorn app.main:create_app --factory --reload
+```
+
+The app is built via a factory function
+(`create_app()`, `backend/app/main.py`), not a module-level instance, so
+importing `app.main` for any reason (running the server, or collecting
+tests) never eagerly validates settings or requires `AEMET_API_KEY` to be
+set; `uvicorn`'s `--factory` flag calls `create_app()` itself once it's
+actually ready to serve.
 
 ### Running tests
 
